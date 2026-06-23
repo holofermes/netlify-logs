@@ -25,6 +25,7 @@ import re
 import sys
 import time
 import fcntl
+import concurrent.futures
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,7 +34,8 @@ API_HOST = os.environ.get("NETLIFY_API_HOST", "https://api.netlify.com")
 HERE     = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.environ.get("NETLIFY_LOG_OUT", os.path.join(HERE, "logs", "access.ndjson"))
 # Production traffic only; no user-agent filter, so all client types are included.
-PROD_FILTER = [{"field": "Branch", "op": "=", "value": "__nf-no-branch-production-traffic"}]
+PROD_BRANCH = "__nf-no-branch-production-traffic"
+PROD_FILTER = [{"field": "Branch", "op": "=", "value": PROD_BRANCH}]
 
 
 def resolve_token(token_file=None):
@@ -92,6 +94,46 @@ def fetch_window(token, site_id, from_ms, to_ms, per_page=100, max_pages=200):
     return all_rows
 
 
+def fetch_detail(token, site_id, request_id, from_ms, to_ms):
+    """Per-request detail: client IP, geo, user agent, size. Returns dict or None.
+
+    The list endpoint omits these; the dashboard's request drawer reads them from
+    this endpoint, one call per request.
+    """
+    url = (f"{API_HOST}/api/v1/sites/{site_id}/observability/requests/{request_id}"
+           f"?from_ts={from_ms}&to_ts={to_ms}&branch={PROD_BRANCH}")
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "netlify-logs/1.0", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except Exception:
+        return None
+
+
+def enrich_rows(token, site_id, rows, from_ms, to_ms, workers=8):
+    """Add client IP / geo / user agent to each row in place (one detail call per row)."""
+    if not rows:
+        return
+
+    def one(row):
+        d = fetch_detail(token, site_id, row.get("request_id", ""), from_ms, to_ms)
+        if not d:
+            return
+        c = d.get("client") or {}
+        row["client_ip"]       = c.get("address")
+        row["country"]         = c.get("country")
+        row["region"]          = c.get("region")
+        row["user_agent"]      = c.get("user_agent")
+        row["referrer"]        = c.get("referrer")
+        row["content_type"]    = d.get("content_type")
+        row["response_size_b"] = d.get("response_size_b")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(rows))) as ex:
+        list(ex.map(one, rows))
+
+
 def existing_ids(path):
     seen = set()
     if os.path.exists(path):
@@ -104,7 +146,7 @@ def existing_ids(path):
     return seen
 
 
-def do_pull(token, site_id, minutes, out):
+def do_pull(token, site_id, minutes, out, enrich=True):
     """Fetch one window; append new rows (deduped by request_id) under a lock."""
     to_ms = int(time.time() * 1000)
     from_ms = to_ms - minutes * 60 * 1000
@@ -116,6 +158,8 @@ def do_pull(token, site_id, minutes, out):
         seen = existing_ids(out)
         fresh = [r for r in rows if r.get("request_id") not in seen]
         fresh.sort(key=lambda r: r.get("timestamp", ""))
+        if enrich:                                # add client IP / geo to new rows
+            enrich_rows(token, site_id, fresh, from_ms, to_ms)
         with open(out, "a") as f:
             for r in fresh:
                 f.write(json.dumps(r, separators=(",", ":")) + "\n")
@@ -147,7 +191,7 @@ def tail_rows(path, n):
 
 def cmd_pull(args):
     summary = do_pull(resolve_token(args.token_file), resolve_site(args.site),
-                      args.minutes, args.out)
+                      args.minutes, args.out, enrich=not args.no_ip)
     if args.quiet and not summary["new"]:
         return
     print(f"{summary['at']}  window={summary['window_min']}m  "
@@ -197,7 +241,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   <input id="addf" placeholder="+ filter, e.g. /blog* &#8629;">
 </div>
 <div class="meta" style="font-size:.8rem">click a chip to cycle off &rarr; only &rarr; hide &middot; click a row for full detail</div>
-<table id="t"><thead><tr><th id="th-time">time</th><th>st</th><th>method</th><th>url</th><th>ms</th><th>cache</th></tr></thead><tbody></tbody></table>
+<table id="t"><thead><tr><th id="th-time">time</th><th>st</th><th>method</th><th>url</th><th>ip</th><th>ms</th><th>cache</th></tr></thead><tbody></tbody></table>
 <div id="detail"></div>
 <script>
 // Works at the site root or under any mount path (e.g. a reverse-proxy /logs).
@@ -255,6 +299,7 @@ function render(){
     tr.innerHTML=`<td class="meta">${fmtLocal(x.timestamp)}</td>`+
       `<td class="${cls}">${st}</td><td>${esc(x.method||'')}</td>`+
       `<td class="url">${esc(x.url||'')}</td>`+
+      `<td class="meta">${esc(x.client_ip||'')}${x.country?' '+esc(x.country):''}</td>`+
       `<td>${ms}</td><td class="meta">${esc(x.edge_cache_result||'')}</td>`;
     tr.onclick=()=>showDetail(x);
     tb.appendChild(tr);
@@ -266,6 +311,8 @@ function showDetail(x){
   const ms=x.duration_ns?(x.duration_ns/1e6).toFixed(1)+' ms':'';
   const rows=[['time ('+TZ+')',fmtLocal(x.timestamp)],['time (UTC)',x.timestamp],
     ['method',x.method],['status',x.status_code],
+    ['client ip',x.client_ip],['country',x.country],['region',x.region],
+    ['user agent',x.user_agent],['referrer',x.referrer],
     ['url',x.url],['duration',ms],['edge cache',x.edge_cache_result],
     ['durable cache',x.durable_cache_result],['request id',x.request_id],
     ['function',x.has_function_invocation],['edge function',x.has_edge_function_invocation],
@@ -347,7 +394,8 @@ def make_handler(args, token, site_id):
             if args.run_secret and self.headers.get("X-Run-Secret") != args.run_secret:
                 return self._send(403, json.dumps({"error": "forbidden"}))
             try:
-                self._send(200, json.dumps(do_pull(token, site_id, args.minutes, args.out)))
+                self._send(200, json.dumps(do_pull(token, site_id, args.minutes,
+                                                    args.out, enrich=not args.no_ip)))
             except SystemExit as e:
                 self._send(500, json.dumps({"error": str(e)}))
     return H
@@ -375,6 +423,7 @@ def main():
     p.add_argument("--out", default=DEFAULT_OUT)
     p.add_argument("--token-file")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--no-ip", action="store_true", help="skip per-request IP/geo enrichment")
     p.set_defaults(func=cmd_pull)
 
     s = sub.add_parser("serve", help="dashboard with a Run-now button")
@@ -388,6 +437,7 @@ def main():
     s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
                    help="extra Host header to accept (repeatable), for proxies "
                         "that keep their own hostname, e.g. tailscale serve")
+    s.add_argument("--no-ip", action="store_true", help="skip per-request IP/geo enrichment")
     s.set_defaults(func=cmd_serve)
 
     args = ap.parse_args()
