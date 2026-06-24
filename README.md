@@ -1,11 +1,10 @@
 # netlify-logs
 
-A small script to pull your own Netlify access logs and keep them locally in SQLite, with a tiny dashboard to look at them. Run `./netlify-logs.py -h` (and
-`pull -h` / `serve -h`) for the full set of options.
+A small script to pull your own Netlify access logs and keep them locally in SQLite, with a tiny dashboard to look at them. Run `./netlify-logs.py -h`, `pull -h`, or `serve -h` for the full set of options.
 
 ![dashboard](docs/01-dashboard.png)
 
-<sub>Screenshots use synthetic demo data (`example.com`, documentation-range IPs).</sub>
+<sub>Screenshots use synthetic demo data: `example.com` and documentation-range IPs.</sub>
 
 ## Setup
 
