@@ -282,6 +282,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #detail dt{color:#6c7086}#detail dd{margin:0;word-break:break-all}
  #detail pre{background:#0b0e14;padding:.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-all}
  .cls{background:#45475a;color:#cdd6f4;margin-bottom:.5rem}
+ #detail .note{background:#0b0e14;border:1px solid #1e2430;border-radius:6px;padding:.5rem .6rem;margin:.2rem 0 .6rem;color:#bac2de;font-size:.82rem;line-height:1.5}
  #mapwrap{margin:0;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
  #mapgrip{height:7px;cursor:ns-resize;background:#1e2430;border-top:1px solid #0b0e14}
  #mapgrip:hover{background:#313a4f}
@@ -372,20 +373,26 @@ filters.forEach(f=>{                 // migrate older saved chips: tri-state m -
 });
 
 function paintChip(i,el){            // toggle one chip in place (no full re-render, so swipe keeps working)
-  filters[i].on=!filters[i].on; PAGE_N=0; saveF();
+  filters[i].on=!filters[i].on; PAGE_N=0; SOLOED=-1; saveF();   // manual toggle clears solo memory
   el.classList.toggle('on',filters[i].on);
-  el.style.background=filters[i].on?filters[i].c+'2e':'transparent';
+  el.style.background=filters[i].on?filters[i].c+'3a':'transparent';
   render();
 }
-function soloChip(i){                // solo: only this one on; if already solo, flip everything back on
-  const soloed=filters[i].on && filters.every((f,j)=>j===i||!f.on);
-  filters.forEach((f,j)=>f.on = soloed ? true : (j===i));
-  saveF(); renderChips(); render();
+function soloChip(i){                // solo = only this on; clicking solo again restores the pre-solo states
+  if(SOLOED===i){
+    if(PRESOLO) filters.forEach((f,j)=>{ if(j<PRESOLO.length) f.on=PRESOLO[j]; });
+    SOLOED=-1; PRESOLO=null;
+  } else {
+    PRESOLO=filters.map(f=>f.on);   // remember exactly which were on/off before soloing
+    filters.forEach((f,j)=>f.on=(j===i));
+    SOLOED=i;
+  }
+  PAGE_N=0; saveF(); renderChips(); render();
 }
 function reorder(from,to){
   if(from<0||from===to)return;
   const [m]=filters.splice(from,1); filters.splice(to,0,m);
-  saveF(); renderChips(); render();
+  SOLOED=-1; saveF(); renderChips(); render();
 }
 function renderChips(){
   PAGE_N=0;                          // any chip change resets to the first page
@@ -406,7 +413,7 @@ function renderChips(){
     lbl.onclick=e=>{if(lbl.isContentEditable)e.stopPropagation();};
     const so=ctl('so','\\u25c9','solo (only this)'); so.onclick=e=>{e.stopPropagation();soloChip(i);};
     const ed=ctl('ed','\\u270e','rename');           ed.onclick=e=>{e.stopPropagation();editText(i,lbl);};
-    const x =ctl('x','\\u00d7','remove');            x.onclick=e=>{e.stopPropagation();filters.splice(i,1);saveF();renderChips();render();};
+    const x =ctl('x','\\u00d7','remove');            x.onclick=e=>{e.stopPropagation();filters.splice(i,1);SOLOED=-1;saveF();renderChips();render();};
     el.onmousedown=e=>{if(e.button===0){SWIPE=true;paintChip(i,el);}};   // tap or start of a swipe
     el.onmouseenter=()=>{if(SWIPE)paintChip(i,el);else pingChip(i,true);};  // swipe-paint, or ping its pins
     el.onmouseleave=()=>pingChip(i,false);
@@ -444,6 +451,7 @@ function editText(i,lbl){          // rename the pattern in place (underlined wh
 const matchAny=(list,path)=>list.some(f=>globToRe(f.p).test(path));
 const PAGE_SIZE=100; let PAGE_N=0;              // table pagination (map/filters still see all)
 let SWIPE=false, DRAGI=-1;                      // chip swipe-toggle + drag-reorder state
+let SOLOED=-1, PRESOLO=null;                    // solo memory: which chip is soloed + states to restore
 let mapH=340; try{const v=+localStorage.getItem('nf_map_h'); if(v)mapH=v;}catch(e){/* no storage */}
 let WORLD=null, AGG=[], VIEW={s:1,tx:0,ty:0};   // VIEW persists across redraws
 function applyView(){
@@ -473,7 +481,7 @@ function drawMap(rows){          // pins by lat/lon on the vendored equirectangu
   svg.setAttribute('viewBox',WORLD.viewBox);
   let h='<g id="vp"><rect x="0" y="0" width="360" height="180" fill="#0a1020"/><path class="land" d="'+WORLD.d+'"/>';
   AGG.forEach((a,i)=>{
-    const cx=a.lon+180, cy=90-a.lat, r=Math.min(0.8+Math.sqrt(a.n),5);
+    const cx=a.lon+180, cy=90-a.lat, r=1.7;       // uniform size; the count is in the hover title
     h+=`<circle class="pin" data-i="${i}" data-key="${a.key}" fill="${a.color||'#89b4fa'}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}">`+
        `<title>${esc(a.where||'?')} \\u00b7 ${a.n} req</title></circle>`;
   });
@@ -536,7 +544,7 @@ function renderPager(total,pages,start){
   lbl.textContent=`page ${PAGE_N+1} / ${pages} \\u00b7 rows ${start+1}\\u2013${Math.min(start+PAGE_SIZE,total)} of ${total}`;
   pg.append(mk('\\u2039 prev',()=>setPage(PAGE_N-1),PAGE_N===0), lbl, mk('next \\u203a',()=>setPage(PAGE_N+1),PAGE_N>=pages-1));
 }
-function showDetail(x){
+function showDetail(x,agg){
   const ms=x.duration_ns?(x.duration_ns/1e6).toFixed(1)+' ms':'';
   const rows=[['time ('+TZ+')',fmtLocal(x.timestamp)],['time (UTC)',x.timestamp],
     ['method',x.method],['status',x.status_code],
@@ -546,7 +554,11 @@ function showDetail(x){
     ['durable cache',x.durable_cache_result],['request id',x.request_id],
     ['function',x.has_function_invocation],['edge function',x.has_edge_function_invocation],
     ['image cdn',x.has_image_cdn_invocation],['ai gateway',x.has_ai_gateway_invocation]];
-  let h='<button class="cls" onclick="hideDetail()">close \\u00d7</button><h2>request</h2><dl>';
+  let h='<button class="cls" onclick="hideDetail()">close \\u00d7</button>';
+  if(agg && agg.n>1)                              // opened from a map pin that groups several requests
+    h+='<div class="note">most recent of '+agg.n+' requests grouped at this location '+
+       '('+esc(agg.where||'')+'), bucketed by lat/lon \\u2248 11&nbsp;km. Showing the latest, from '+esc(x.client_ip||'?')+'.</div>';
+  h+='<h2>request</h2><dl>';
   for(const [k,v] of rows) h+='<dt>'+k+'</dt><dd>'+esc(v==null?'':v)+'</dd>';
   h+='</dl>';
   if(x.logs&&x.logs.length) h+='<h2>logs</h2><pre>'+esc(JSON.stringify(x.logs,null,2))+'</pre>';
@@ -607,7 +619,7 @@ async function runNow(){
 }
 document.querySelector('#addf').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.value.trim()){
-    filters.push({p:e.target.value.trim(),on:true,c:pickColor()});e.target.value='';saveF();renderChips();render();
+    filters.push({p:e.target.value.trim(),on:true,c:pickColor()});e.target.value='';SOLOED=-1;saveF();renderChips();render();
   }
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')hideDetail();});
@@ -639,7 +651,7 @@ window.addEventListener('mouseup',()=>{drag=null;mapSvg.style.cursor='';SWIPE=fa
 mapSvg.addEventListener('click',e=>{
   if(moved){moved=false;return;}                              // a pan-drag is not a pin click
   const c=e.target.closest('.pin'); if(!c) return;
-  const a=AGG[+c.dataset.i]; if(a){showDetail(a.row);selectPin(a.key);}
+  const a=AGG[+c.dataset.i]; if(a){showDetail(a.row,a);selectPin(a.key);}
 });
 mapSvg.addEventListener('dblclick',resetView);                // double-click resets zoom/pan
 const applyMapH=()=>{mapSvg.style.height=mapH+'px';};         // map height: drag the grip
