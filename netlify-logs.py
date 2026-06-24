@@ -244,11 +244,12 @@ def cmd_pull(args):
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <title>access log</title>
 <style>
+ html{scrollbar-gutter:stable}      /* always reserve the scrollbar's space so content never shifts */
  body{font:14px/1.4 ui-monospace,Menlo,monospace;margin:0;padding:0 2rem 2rem;background:#0b0e14;color:#cdd6f4}
  #top{position:sticky;top:0;z-index:5;background:#0b0e14;padding:1rem 0 .5rem;border-bottom:1px solid #1e2430}
- #topbar{display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center}
+ #controls{display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center;margin:.55rem 0 .65rem}
  h1{font-size:1.1rem;margin:0}button{font:inherit;padding:.3rem .8rem;background:#89b4fa;color:#0b0e14;border:0;border-radius:6px;cursor:pointer}
- button:disabled{opacity:.5}#msg{color:#a6e3a1}
+ button:disabled{opacity:.5}#msg{color:#a6e3a1;margin-left:auto;text-align:right}
  table{border-collapse:collapse;margin-top:1rem;width:100%;table-layout:fixed}td,th{padding:.2rem .6rem;text-align:left;border-bottom:1px solid #1e2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
  th:nth-child(1),td:nth-child(1){width:13.5rem}th:nth-child(2),td:nth-child(2){width:3rem}
  th:nth-child(3),td:nth-child(3){width:4.5rem}th:nth-child(5),td:nth-child(5){width:9.5rem}
@@ -259,7 +260,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #toast.show{opacity:1;transform:none}
  td.url{color:#94e2d5}.s2{color:#a6e3a1}.s3{color:#f9e2af}.s4{color:#fab387}.s5{color:#f38ba8}
  .meta{color:#6c7086}
- #filterbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:.4rem 0 0}
+ #filterbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:0 0 .8rem}
  #filters{display:contents}
  .chip .gr{cursor:grab;opacity:.4;margin-right:.3rem;flex:none;font-size:.8rem}.chip .gr:hover{opacity:.9}
  .chip.dragging{opacity:.15;pointer-events:none}
@@ -281,7 +282,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #detail dt{color:#6c7086}#detail dd{margin:0;word-break:break-all}
  #detail pre{background:#0b0e14;padding:.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-all}
  .cls{background:#45475a;color:#cdd6f4;margin-bottom:.5rem}
- #mapwrap{margin:.4rem 0 0;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
+ #mapwrap{margin:0;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
  #mapgrip{height:7px;cursor:ns-resize;background:#1e2430;border-top:1px solid #0b0e14}
  #mapgrip:hover{background:#313a4f}
  #scrim{position:fixed;inset:0;background:#0007;display:none;z-index:4}
@@ -302,10 +303,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #map .pin.sel{fill-opacity:.5;stroke:#fff;stroke-width:.85}
 </style></head><body>
 <div id="top">
- <div id="topbar">
-  <h1>access log<span id="host" class="meta"></span></h1>
+ <h1>access log<span id="host" class="meta"></span></h1>
+ <div id="controls">
   <button id="run" onclick="runNow()">refresh</button>
-  <span id="msg" class="meta">loading&hellip;</span>
   <span id="datebar" class="meta">range
    <select id="preset">
     <option value="1">last 1h</option>
@@ -319,6 +319,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="apply">apply</button>
    <span id="rangemsg"></span>
   </span>
+  <span id="msg" class="meta">loading&hellip;</span>
  </div>
  <div id="filterbar"><span id="filters"></span><input id="addf" placeholder="+ filter, e.g. /blog* &#8629;"></div>
  <div id="mapwrap">
