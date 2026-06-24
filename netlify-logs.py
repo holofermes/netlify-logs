@@ -54,7 +54,7 @@ def resolve_token(token_file=None):
         try:
             d = json.load(open(cfg))
             return next(iter(d["users"].values()))["auth"]["token"].strip()
-        except Exception:
+        except (OSError, ValueError, KeyError, StopIteration):
             pass
     sys.exit("no Netlify auth found. Install the Netlify CLI and run `netlify login`.")
 
@@ -112,7 +112,7 @@ def fetch_detail(token, site_id, request_id, from_ms, to_ms):
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)
-    except Exception:
+    except (OSError, ValueError):     # network error or bad JSON: skip enrichment
         return None
 
 
@@ -197,7 +197,7 @@ def maybe_import_legacy(conn):
             if line:
                 try:
                     rows.append(json.loads(line))
-                except Exception:
+                except json.JSONDecodeError:
                     pass
     if rows:
         print(f"imported {db_insert(conn, rows)} rows from {LEGACY_NDJSON}", file=sys.stderr)
@@ -271,7 +271,7 @@ def cmd_import(args):
             if line:
                 try:
                     rows.append(json.loads(line))
-                except Exception:
+                except json.JSONDecodeError:
                     pass
     new = db_insert(conn, rows)
     conn.close()
@@ -364,7 +364,7 @@ function globToRe(p){          // substring glob: * -> .*, metachars escaped
 const DEF=[];   // no seeded filters; add your own via the box (saved per browser)
 let filters;
 try{filters=JSON.parse(localStorage.getItem('nf_filters'))||DEF;}catch(e){filters=DEF;}
-const saveF=()=>{try{localStorage.setItem('nf_filters',JSON.stringify(filters));}catch(e){}};
+const saveF=()=>{try{localStorage.setItem('nf_filters',JSON.stringify(filters));}catch(e){/* storage blocked (private mode); filters just don't persist */}};
 let ROWS=[];
 
 function renderChips(){
@@ -457,7 +457,7 @@ function showDetail(x){
 const hideDetail=()=>document.querySelector('#detail').classList.remove('open');
 
 function siteHost(){             // derive the site host from the data (no hardcoded domain)
-  for(const x of ROWS){ if(x.url){ try{return new URL(x.url).host;}catch(e){} } }
+  for(const x of ROWS){ if(x.url){ try{return new URL(x.url).host;}catch(e){/* malformed url, try next */} } }
   return '';
 }
 function rangeMs(){              // -> {from,to} epoch ms from the preset / custom inputs
