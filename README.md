@@ -4,8 +4,6 @@ A small script to pull your own Netlify access logs and keep them locally in SQL
 
 ![dashboard](docs/01-dashboard.png)
 
-<sub>Screenshots use synthetic demo data: `example.com` and documentation-range IPs.</sub>
-
 ## Setup
 
 ```sh
