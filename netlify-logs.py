@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-netlify-logs -- pull per-request access logs for a Netlify site into NDJSON.
+netlify-logs -- pull per-request access logs for a Netlify site into SQLite.
 
 Modes:
-  pull    fetch one time window, append (deduped) to the log file   -- cron
+  pull    fetch one time window, insert (deduped) into the database   -- cron
   serve   dashboard with a "Run now" button and a recent-requests view
 
 Auth: install the Netlify CLI and run `netlify login`; the token is read from
@@ -35,8 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 API_HOST = os.environ.get("NETLIFY_API_HOST", "https://api.netlify.com")
 HERE     = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB    = os.environ.get("NETLIFY_DB", os.path.join(HERE, "logs", "access.db"))
-LEGACY_NDJSON = os.path.join(HERE, "logs", "access.ndjson")  # auto-imported once if present
+DEFAULT_DB = os.environ.get("NETLIFY_DB", os.path.join(HERE, "logs", "access.db"))
 # Production traffic only; no user-agent filter, so all client types are included.
 PROD_BRANCH = "__nf-no-branch-production-traffic"
 PROD_FILTER = [{"field": "Branch", "op": "=", "value": PROD_BRANCH}]
@@ -184,25 +183,6 @@ def db_existing(conn, ids):
     return have
 
 
-def maybe_import_legacy(conn):
-    """One-time import of a pre-existing access.ndjson when the DB starts out empty."""
-    if not os.path.exists(LEGACY_NDJSON):
-        return
-    if conn.execute("SELECT 1 FROM requests LIMIT 1").fetchone():
-        return
-    rows = []
-    with open(LEGACY_NDJSON) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    if rows:
-        print(f"imported {db_insert(conn, rows)} rows from {LEGACY_NDJSON}", file=sys.stderr)
-
-
 def do_pull(token, site_id, minutes, db_path, enrich=True):
     """Fetch one window; insert new rows (deduped by request_id) into SQLite."""
     to_ms = int(time.time() * 1000)
@@ -211,7 +191,6 @@ def do_pull(token, site_id, minutes, db_path, enrich=True):
     rows.sort(key=lambda r: r.get("timestamp", ""))
 
     conn = db_connect(db_path)
-    maybe_import_legacy(conn)
     if enrich:                                    # enrich only rows we don't already have
         have = db_existing(conn, [r["request_id"] for r in rows if r.get("request_id")])
         enrich_rows(token, site_id,
@@ -260,22 +239,6 @@ def cmd_pull(args):
         print("  status  " + "  ".join(f"{k}:{v}" for k, v in sorted(by_status.items(), key=lambda x: -x[1])))
         for path, c in sorted(by_path.items(), key=lambda x: -x[1])[:8]:
             print(f"  {c:>4}  {path[:90]}")
-
-
-def cmd_import(args):
-    conn = db_connect(args.db)
-    rows = []
-    with open(args.file) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    new = db_insert(conn, rows)
-    conn.close()
-    print(f"imported {new} new rows ({len(rows)} read) from {args.file} -> {args.db}")
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
@@ -611,7 +574,7 @@ def make_handler(args, token, site_id):
 def cmd_serve(args):
     token = resolve_token(args.token_file)
     site_id = resolve_site(args.site)
-    conn = db_connect(args.db); maybe_import_legacy(conn); conn.close()
+    db_connect(args.db).close()          # ensure the store exists
     httpd = ThreadingHTTPServer((args.host, args.port), make_handler(args, token, site_id))
     print(f"serving on http://{args.host}:{args.port}  "
           f"(window {args.minutes}m, db {args.db})", flush=True)
@@ -647,11 +610,6 @@ def main():
                         "that keep their own hostname, e.g. tailscale serve")
     s.add_argument("--no-ip", action="store_true", help="skip per-request IP/geo enrichment")
     s.set_defaults(func=cmd_serve)
-
-    im = sub.add_parser("import", help="import an existing access.ndjson into the DB")
-    im.add_argument("file")
-    im.add_argument("--db", default=DEFAULT_DB)
-    im.set_defaults(func=cmd_import)
 
     args = ap.parse_args()
     args.func(args)

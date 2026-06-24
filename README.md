@@ -17,19 +17,13 @@ export NETLIFY_SITE_ID=<your-site-id>   # Site configuration -> Site information
 ```
 
 `install.sh` adds two user systemd units: a pull every 15 minutes, and the
-dashboard on `127.0.0.1:8800`. Requests are stored in `logs/access.db` (SQLite,
-stdlib), deduped by `request_id`. An existing `logs/access.ndjson` is imported
-automatically on first run, or do it explicitly with
-`./netlify-logs.py import <file>`.
+dashboard on `127.0.0.1:8800`. Requests are stored in `logs/access.db`, a
+stdlib SQLite database, deduped by `request_id`.
 
 ## Dashboard
 
-- **Date range.** Last 1h / 24h / 7d / 30d, custom, or all (queried server-side).
-- **World map** of request origins (zoom, pan, `fit`).
+- **Date range.** Last 1h / 24h / 7d / 30d, custom, or all.
+- **World map** of request origins. Zoom, pan, fit.
 - **Entry-detail drawer.** Click any row or pin for the full record.
 - **Filter chips.** Click to cycle off → only → hide; add your own URL globs.
 - **Run now.** Pull on demand and refresh.
-
-| entry detail | filter chips |
-|---|---|
-| ![detail](docs/02-detail.png) | ![filters](docs/03-filters.png) |
