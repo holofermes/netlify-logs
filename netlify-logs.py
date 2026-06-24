@@ -251,8 +251,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  button:disabled{opacity:.5}#msg{color:#a6e3a1}
  table{border-collapse:collapse;margin-top:1rem;width:100%;table-layout:fixed}td,th{padding:.2rem .6rem;text-align:left;border-bottom:1px solid #1e2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
  th:nth-child(1),td:nth-child(1){width:13.5rem}th:nth-child(2),td:nth-child(2){width:3rem}
- th:nth-child(3),td:nth-child(3){width:4.5rem}th:nth-child(5),td:nth-child(5){width:10rem}
- th:nth-child(6),td:nth-child(6){width:4rem}th:nth-child(7),td:nth-child(7){width:5rem}
+ th:nth-child(3),td:nth-child(3){width:4.5rem}th:nth-child(5),td:nth-child(5){width:9.5rem}
+ th:nth-child(6),td:nth-child(6){width:4rem}th:nth-child(7),td:nth-child(7){width:8rem}
+ th:nth-child(8),td:nth-child(8){width:4rem}th:nth-child(9),td:nth-child(9){width:5rem}
  thead th{position:sticky;top:var(--toph,0);background:#0b0e14;z-index:3;box-shadow:inset 0 -1px 0 #1e2430}
  #toast{position:fixed;bottom:1rem;right:1rem;background:#11151f;border:1px solid #313a4f;color:#a6e3a1;padding:.4rem .8rem;border-radius:8px;font-size:.85rem;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none;z-index:7}
  #toast.show{opacity:1;transform:none}
@@ -296,9 +297,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #datebar #apply{background:#313a4f;cursor:pointer}
  #map{display:block;width:100%;height:340px;background:#0a1020;cursor:grab;touch-action:none}
  #map .land{fill:#1e2430;stroke:#313a4f;stroke-width:.12}
- #map .pin{fill-opacity:.75;stroke:#0b0e14;stroke-width:.12;cursor:pointer}
- #map .pin:hover,#map .pin.ping{fill:#f9e2af;fill-opacity:1;stroke:#fff;stroke-width:.4}
- #map .pin.sel{fill:#fff;fill-opacity:1;stroke:#f38ba8;stroke-width:.7}
+ #map .pin{fill-opacity:.75;stroke:#0b0e14;stroke-width:.12;cursor:pointer;transition:fill-opacity .18s ease-out,stroke .18s ease-out,stroke-width .18s ease-out}
+ #map .pin:hover,#map .pin.ping{fill-opacity:.4;stroke:#fff;stroke-width:.5}   /* keep own color, translucent + outlined, brought to front */
+ #map .pin.sel{fill-opacity:.5;stroke:#fff;stroke-width:.85}
 </style></head><body>
 <div id="top">
  <div id="topbar">
@@ -328,7 +329,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  <div id="pager"></div>
 </div>
 <input type="color" id="cpick">
-<table id="t"><thead><tr><th id="th-time">time</th><th>st</th><th>method</th><th>url</th><th>ip</th><th>ms</th><th>cache</th></tr></thead><tbody></tbody></table>
+<table id="t"><thead><tr><th id="th-time">time</th><th>st</th><th>method</th><th>url</th><th>ip</th><th>country</th><th>region</th><th>ms</th><th>cache</th></tr></thead><tbody></tbody></table>
 <div id="scrim"></div>
 <div id="toast"></div>
 <div id="detail"></div>
@@ -406,7 +407,8 @@ function renderChips(){
     const ed=ctl('ed','\\u270e','rename');           ed.onclick=e=>{e.stopPropagation();editText(i,lbl);};
     const x =ctl('x','\\u00d7','remove');            x.onclick=e=>{e.stopPropagation();filters.splice(i,1);saveF();renderChips();render();};
     el.onmousedown=e=>{if(e.button===0){SWIPE=true;paintChip(i,el);}};   // tap or start of a swipe
-    el.onmouseenter=()=>{if(SWIPE)paintChip(i,el);};                     // swiped over while pressed
+    el.onmouseenter=()=>{if(SWIPE)paintChip(i,el);else pingChip(i,true);};  // swipe-paint, or ping its pins
+    el.onmouseleave=()=>pingChip(i,false);
     el.onmouseup=()=>{el.draggable=false;};                              // never leave it draggable
     el.draggable=false;
     el.ondragstart=e=>{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text','');DRAGI=i;el.classList.add('dragging');};
@@ -480,11 +482,17 @@ function drawMap(rows){          // pins by lat/lon on the vendored equirectangu
 }
 let SEL='';
 const pinByKey=k=>k?document.querySelector('#map .pin[data-key="'+k+'"]'):null;
-function pingPin(k,on){const p=pinByKey(k);if(p)p.classList.toggle('ping',on);}
+const toFront=p=>{if(p&&p.parentNode)p.parentNode.appendChild(p);};   // SVG paint order: last = on top
+function pingPin(k,on){const p=pinByKey(k);if(!p)return;p.classList.toggle('ping',on);if(on)toFront(p);}
+function pingChip(i,on){                           // hovering a chip pings all its matching locations
+  if(!filters[i]||!filters[i].p)return;
+  const rx=globToRe(filters[i].p), seen=new Set();
+  for(const x of ROWS){ if(x.latitude!=null && rx.test(pathOf(x.url))){ const k=locKey(x); if(k&&!seen.has(k)){seen.add(k);pingPin(k,on);} } }
+}
 function selectPin(k){                            // mark one location selected (persists across redraws)
   SEL = (k===undefined) ? SEL : k;
   document.querySelectorAll('#map .pin.sel').forEach(p=>p.classList.remove('sel'));
-  const p=pinByKey(SEL); if(p)p.classList.add('sel');
+  const p=pinByKey(SEL); if(p){p.classList.add('sel');toFront(p);}
 }
 const locKey=x=>(x.latitude!=null&&x.longitude!=null)?((+x.latitude).toFixed(1)+','+(+x.longitude).toFixed(1)):'';
 function render(){
@@ -504,7 +512,9 @@ function render(){
     tr.innerHTML=`<td class="meta">${fmtLocal(x.timestamp)}</td>`+
       `<td class="${cls}">${st}</td><td>${esc(x.method||'')}</td>`+
       `<td class="url"${cc?' style="color:'+cc+'"':''} title="${esc(p)}">${esc(p)}</td>`+
-      `<td class="meta">${esc(x.client_ip||'')}${x.country?' '+esc(x.country):''}</td>`+
+      `<td class="meta">${esc(x.client_ip||'')}</td>`+
+      `<td class="meta">${esc(x.country||'')}</td>`+
+      `<td class="meta" title="${esc(x.region||'')}">${esc(x.region||'')}</td>`+
       `<td>${ms}</td><td class="meta">${esc(x.edge_cache_result||'')}</td>`;
     if(key) tr.dataset.key=key;
     tr.onmouseenter=()=>pingPin(key,true);
