@@ -1,11 +1,6 @@
 # netlify-logs
 
-**Pay Netlify.** Their observability, log drains, and analytics are the real
-product — if you depend on this, give them money.
-
-This repo is *not* meant to replace any of that. It's a small, stdlib-only thing
-to pull your own per-request access logs and keep them locally as NDJSON, plus a
-dashboard to look at them. That's it. Run `./netlify-logs.py -h` (and
+A small script to pull your own Netlify access logs and keep them locally as NDJSON, with a tiny dashboard to look at them. Run `./netlify-logs.py -h` (and
 `pull -h` / `serve -h`) for the full set of options.
 
 ## Setup
