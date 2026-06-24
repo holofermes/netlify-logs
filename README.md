@@ -1,8 +1,15 @@
 # netlify-logs
 
 Pull per-request access logs for a Netlify site into NDJSON — on a timer and on
-demand. Stdlib Python, no dependencies. The dashboard binds to localhost; how
-you reach it from elsewhere is your call (see below).
+demand — and browse them on a self-contained dashboard with a world map, a
+detail view, and live filters. Stdlib Python, no runtime dependencies. The
+dashboard binds to localhost; how you reach it from elsewhere is your call
+(see below).
+
+Each new request is enriched (via Netlify's per-request detail endpoint) with
+client IP, country, region, latitude/longitude, and user agent, so the map and
+detail view have something to show. Pass `--no-ip` to skip enrichment (saves one
+GET per new request).
 
 ## Setup
 
@@ -29,8 +36,19 @@ export NETLIFY_SITE_ID=<your-site-id>   # Site configuration -> Site information
 `--site` is optional if `NETLIFY_SITE_ID` is set in the environment.
 
 Output: `logs/access.ndjson` — one request per line, append-only, deduped by
-`request_id`. The dashboard's **Run now** button triggers a pull and shows the
-most recent requests.
+`request_id`.
+
+## Dashboard
+
+- **World map** of request origins (pins by lat/lon, sized by volume, clustered
+  by location). Drawn from a vendored equirectangular land outline
+  (`world.json`) served by the app — no tiles, no CDN, no map library.
+- **Click any row** (or a pin) for a detail drawer: full URL, timestamps (local
+  + UTC), IP, country/region, user agent, referrer, cache results, raw JSON.
+- **Filter chips** with three states — click to cycle off → only → hide — plus a
+  box to add your own URL globs (`*` wildcard). Your set is saved per browser.
+  The map and table both honor the active filters.
+- **Run now** triggers a pull and refreshes the view.
 
 ## Reaching the dashboard remotely
 
@@ -55,4 +73,5 @@ ssh -L 8800:127.0.0.1:8800 <this-host>                        # ad-hoc tunnel
 | `NETLIFY_LOGS_PORT` | `8800` | dashboard port |
 | `NETLIFY_LOGS_WINDOW` | `20` | pull lookback (minutes) |
 
-Requirements: Python 3 (stdlib only), systemd.
+Requirements: Python 3 (stdlib only), systemd. The map outline ships with the
+repo as `world.json` next to the script — no other assets needed.

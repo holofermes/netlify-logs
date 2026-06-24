@@ -97,8 +97,8 @@ def fetch_window(token, site_id, from_ms, to_ms, per_page=100, max_pages=200):
 def fetch_detail(token, site_id, request_id, from_ms, to_ms):
     """Per-request detail: client IP, geo, user agent, size. Returns dict or None.
 
-    The list endpoint omits these; the dashboard's request drawer reads them from
-    this endpoint, one call per request.
+    The list endpoint omits these fields; do_pull calls this once per new request
+    to enrich each row before it is written.
     """
     url = (f"{API_HOST}/api/v1/sites/{site_id}/observability/requests/{request_id}"
            f"?from_ts={from_ms}&to_ts={to_ms}&branch={PROD_BRANCH}")
@@ -125,6 +125,8 @@ def enrich_rows(token, site_id, rows, from_ms, to_ms, workers=8):
         row["client_ip"]       = c.get("address")
         row["country"]         = c.get("country")
         row["region"]          = c.get("region")
+        row["latitude"]        = c.get("latitude")
+        row["longitude"]       = c.get("longitude")
         row["user_agent"]      = c.get("user_agent")
         row["referrer"]        = c.get("referrer")
         row["content_type"]    = d.get("content_type")
@@ -209,7 +211,7 @@ def cmd_pull(args):
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<title>Netlify access log</title>
+<title>access log</title>
 <style>
  body{font:14px/1.4 ui-monospace,Menlo,monospace;margin:2rem;background:#0b0e14;color:#cdd6f4}
  h1{font-size:1.1rem}button{font:inherit;padding:.5rem 1rem;background:#89b4fa;color:#0b0e14;border:0;border-radius:6px;cursor:pointer}
@@ -232,8 +234,15 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #detail dt{color:#6c7086}#detail dd{margin:0;word-break:break-all}
  #detail pre{background:#0b0e14;padding:.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-all}
  .cls{background:#45475a;color:#cdd6f4;margin-bottom:.5rem}
+ #mapwrap{margin:1rem 0;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
+ #maphdr{padding:.4rem .7rem;font-size:.8rem;border-bottom:1px solid #1e2430}
+ #fit{padding:.05rem .55rem;font-size:.75rem;margin-left:.4rem;background:#313a4f;color:#cdd6f4}
+ #map{display:block;width:100%;height:auto;background:#0a1020;cursor:grab;touch-action:none}
+ #map .land{fill:#1e2430;stroke:#313a4f;stroke-width:.12}
+ #map .pin{fill:#89b4fa;fill-opacity:.65;stroke:#0b0e14;stroke-width:.12;cursor:pointer}
+ #map .pin:hover{fill:#f9e2af;fill-opacity:.95}
 </style></head><body>
-<h1>Netlify &middot; access log</h1>
+<h1>access log<span id="host" class="meta"></span></h1>
 <button id="run" onclick="runNow()">Run pull now</button>
 <span id="msg" class="meta">loading&hellip;</span>
 <div id="filterbar">
@@ -241,6 +250,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   <input id="addf" placeholder="+ filter, e.g. /blog* &#8629;">
 </div>
 <div class="meta" style="font-size:.8rem">click a chip to cycle off &rarr; only &rarr; hide &middot; click a row for full detail</div>
+<div id="mapwrap"><div id="maphdr" class="meta">map &middot; <span id="mapcount">0 locations</span> &middot; scroll to zoom, drag to pan<button id="fit">fit</button></div><svg id="map" preserveAspectRatio="xMidYMid meet"></svg></div>
 <table id="t"><thead><tr><th id="th-time">time</th><th>st</th><th>method</th><th>url</th><th>ip</th><th>ms</th><th>cache</th></tr></thead><tbody></tbody></table>
 <div id="detail"></div>
 <script>
@@ -267,7 +277,7 @@ function globToRe(p){          // substring glob: * -> .*, metachars escaped
   }
   return new RegExp(s,'i');
 }
-const DEF=[{p:'pixel.gif*',m:'off'},{p:'/resume',m:'off'},{p:'/portfolio',m:'off'}];
+const DEF=[];   // no seeded filters; add your own via the box (saved per browser)
 let filters;
 try{filters=JSON.parse(localStorage.getItem('nf_filters'))||DEF;}catch(e){filters=DEF;}
 const saveF=()=>{try{localStorage.setItem('nf_filters',JSON.stringify(filters));}catch(e){}};
@@ -286,26 +296,62 @@ function renderChips(){
   });
 }
 const matchAny=(list,path)=>list.some(f=>globToRe(f.p).test(path));
+let WORLD=null, AGG=[], VIEW={s:1,tx:0,ty:0};   // VIEW persists across redraws
+function applyView(){
+  const g=document.querySelector('#vp');
+  if(g) g.setAttribute('transform',`translate(${VIEW.tx} ${VIEW.ty}) scale(${VIEW.s})`);
+}
+function resetView(){VIEW={s:1,tx:0,ty:0};applyView();}   // "fit": back to whole world
+function svgPt(svg,ev){          // client px -> viewBox coords (ignores the group transform)
+  const p=svg.createSVGPoint(); p.x=ev.clientX; p.y=ev.clientY;
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+function drawMap(rows){          // pins by lat/lon on the vendored equirectangular land
+  const svg=document.querySelector('#map'); if(!svg||!WORLD) return;
+  const m=new Map();             // aggregate by rounded location so clusters don't overdraw
+  for(const x of rows){
+    if(x.latitude==null||x.longitude==null) continue;
+    const k=(+x.latitude).toFixed(1)+','+(+x.longitude).toFixed(1);
+    let a=m.get(k);
+    if(!a){a={lat:+x.latitude,lon:+x.longitude,n:0,row:x,
+              where:[x.region,x.country].filter(Boolean).join(', ')};m.set(k,a);}
+    a.n++;                       // rows are newest-first, so the first seen stays as sample
+  }
+  AGG=[...m.values()];
+  svg.setAttribute('viewBox',WORLD.viewBox);
+  let h='<g id="vp"><rect x="0" y="0" width="360" height="180" fill="#0a1020"/><path class="land" d="'+WORLD.d+'"/>';
+  AGG.forEach((a,i)=>{
+    const cx=a.lon+180, cy=90-a.lat, r=Math.min(0.8+Math.sqrt(a.n),5);
+    h+=`<circle class="pin" data-i="${i}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}">`+
+       `<title>${esc(a.where||'?')} \\u00b7 ${a.n} req</title></circle>`;
+  });
+  svg.innerHTML=h+'</g>';
+  applyView();                   // re-apply current zoom/pan after the rebuild
+  document.querySelector('#mapcount').textContent=AGG.length+' location'+(AGG.length===1?'':'s');
+}
 function render(){
   const onlies=filters.filter(f=>f.m==='only'),hides=filters.filter(f=>f.m==='hide');
-  const tb=document.querySelector('#t tbody');tb.innerHTML='';let shown=0;
-  for(const x of ROWS){
+  const vis=ROWS.filter(x=>{
     const path=pathOf(x.url);
-    if(onlies.length && !matchAny(onlies,path)) continue;
-    if(hides.length && matchAny(hides,path)) continue;
-    shown++;
+    if(onlies.length && !matchAny(onlies,path)) return false;
+    if(hides.length && matchAny(hides,path)) return false;
+    return true;
+  });
+  const tb=document.querySelector('#t tbody');tb.innerHTML='';
+  for(const x of vis){
     const st=(''+x.status_code),cls='s'+st[0],ms=x.duration_ns?Math.round(x.duration_ns/1e6):'';
     const tr=document.createElement('tr');
     tr.innerHTML=`<td class="meta">${fmtLocal(x.timestamp)}</td>`+
       `<td class="${cls}">${st}</td><td>${esc(x.method||'')}</td>`+
-      `<td class="url">${esc(x.url||'')}</td>`+
+      `<td class="url">${esc(pathOf(x.url))}</td>`+
       `<td class="meta">${esc(x.client_ip||'')}${x.country?' '+esc(x.country):''}</td>`+
       `<td>${ms}</td><td class="meta">${esc(x.edge_cache_result||'')}</td>`;
     tr.onclick=()=>showDetail(x);
     tb.appendChild(tr);
   }
+  drawMap(vis);
   const f=onlies.length||hides.length?' (filtered)':'';
-  document.querySelector('#msg').textContent=shown+' / '+ROWS.length+' requests'+f;
+  document.querySelector('#msg').textContent=vis.length+' / '+ROWS.length+' requests'+f;
 }
 function showDetail(x){
   const ms=x.duration_ns?(x.duration_ns/1e6).toFixed(1)+' ms':'';
@@ -326,8 +372,16 @@ function showDetail(x){
 }
 const hideDetail=()=>document.querySelector('#detail').classList.remove('open');
 
+function siteHost(){             // derive the site host from the data (no hardcoded domain)
+  for(const x of ROWS){ if(x.url){ try{return new URL(x.url).host;}catch(e){} } }
+  return '';
+}
 async function load(){
-  const r=await fetch(BASE+'/recent?n=500');ROWS=await r.json();render();
+  const r=await fetch(BASE+'/recent?n=500');ROWS=await r.json();
+  const host=siteHost();
+  document.querySelector('#host').textContent=host?' \\u00b7 '+host:'';
+  if(host) document.title='access log \\u00b7 '+host;
+  render();
 }
 async function runNow(){
   const b=document.querySelector('#run'),m=document.querySelector('#msg');
@@ -344,7 +398,34 @@ document.querySelector('#addf').addEventListener('keydown',e=>{
   }
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')hideDetail();});
+
+// --- map zoom (wheel, toward cursor) + pan (drag); "fit" resets ---
+const mapSvg=document.querySelector('#map');
+let drag=null, moved=false;
+mapSvg.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const m=svgPt(mapSvg,e);
+  const cp={x:(m.x-VIEW.tx)/VIEW.s, y:(m.y-VIEW.ty)/VIEW.s};   // point under cursor, pre-zoom
+  const s=Math.min(Math.max(VIEW.s*(e.deltaY<0?1.2:1/1.2),1),40);
+  VIEW.tx=m.x-cp.x*s; VIEW.ty=m.y-cp.y*s; VIEW.s=s;            // keep that point fixed
+  applyView();
+},{passive:false});
+mapSvg.addEventListener('mousedown',e=>{drag=svgPt(mapSvg,e);moved=false;mapSvg.style.cursor='grabbing';});
+window.addEventListener('mousemove',e=>{
+  if(!drag) return;
+  const m=svgPt(mapSvg,e);
+  if(Math.abs(m.x-drag.x)+Math.abs(m.y-drag.y)>0.3) moved=true;
+  VIEW.tx+=m.x-drag.x; VIEW.ty+=m.y-drag.y; drag=m; applyView();
+});
+window.addEventListener('mouseup',()=>{drag=null;mapSvg.style.cursor='';});
+mapSvg.addEventListener('click',e=>{
+  if(moved){moved=false;return;}                              // a pan-drag is not a pin click
+  const c=e.target.closest('.pin'); if(!c) return;
+  const a=AGG[+c.dataset.i]; if(a) showDetail(a.row);
+});
+document.querySelector('#fit').onclick=resetView;
 document.querySelector('#th-time').textContent='time ('+TZ+')';
+fetch(BASE+'/world').then(r=>r.json()).then(w=>{WORLD=w;render();}).catch(()=>{});
 renderChips();load();setInterval(load,30000);
 </script></body></html>"""
 
@@ -386,6 +467,12 @@ def make_handler(args, token, site_id):
                 m = re.search(r"[?&]n=(\d+)", self.path)
                 n = min(int(m.group(1)) if m else 150, 1000)
                 return self._send(200, json.dumps(tail_rows(args.out, n)))
+            if path.endswith("/world"):     # vendored equirectangular land outline
+                wp = os.path.join(HERE, "world.json")
+                if os.path.exists(wp):
+                    with open(wp, "rb") as wf:
+                        return self._send(200, wf.read())
+                return self._send(404, "{}")
             return self._send(200, PAGE, "text/html; charset=utf-8")
 
         def do_POST(self):
