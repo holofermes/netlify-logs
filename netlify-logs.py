@@ -249,11 +249,14 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #topbar{display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center}
  h1{font-size:1.1rem;margin:0}button{font:inherit;padding:.3rem .8rem;background:#89b4fa;color:#0b0e14;border:0;border-radius:6px;cursor:pointer}
  button:disabled{opacity:.5}#msg{color:#a6e3a1}
- table{border-collapse:collapse;margin-top:1rem;width:100%}td,th{padding:.2rem .6rem;text-align:left;border-bottom:1px solid #1e2430;white-space:nowrap}
+ table{border-collapse:collapse;margin-top:1rem;width:100%;table-layout:fixed}td,th{padding:.2rem .6rem;text-align:left;border-bottom:1px solid #1e2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ th:nth-child(1),td:nth-child(1){width:13.5rem}th:nth-child(2),td:nth-child(2){width:3rem}
+ th:nth-child(3),td:nth-child(3){width:4.5rem}th:nth-child(5),td:nth-child(5){width:10rem}
+ th:nth-child(6),td:nth-child(6){width:4rem}th:nth-child(7),td:nth-child(7){width:5rem}
  thead th{position:sticky;top:var(--toph,0);background:#0b0e14;z-index:3;box-shadow:inset 0 -1px 0 #1e2430}
  #toast{position:fixed;bottom:1rem;right:1rem;background:#11151f;border:1px solid #313a4f;color:#a6e3a1;padding:.4rem .8rem;border-radius:8px;font-size:.85rem;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none;z-index:7}
  #toast.show{opacity:1;transform:none}
- td.url{white-space:normal;word-break:break-all;color:#94e2d5}.s2{color:#a6e3a1}.s3{color:#f9e2af}.s4{color:#fab387}.s5{color:#f38ba8}
+ td.url{color:#94e2d5}.s2{color:#a6e3a1}.s3{color:#f9e2af}.s4{color:#fab387}.s5{color:#f38ba8}
  .meta{color:#6c7086}
  #filterbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:.4rem 0 0}
  #filters{display:contents}
@@ -500,7 +503,7 @@ function render(){
     const tr=document.createElement('tr');
     tr.innerHTML=`<td class="meta">${fmtLocal(x.timestamp)}</td>`+
       `<td class="${cls}">${st}</td><td>${esc(x.method||'')}</td>`+
-      `<td class="url"${cc?' style="color:'+cc+'"':''}>${esc(p)}</td>`+
+      `<td class="url"${cc?' style="color:'+cc+'"':''} title="${esc(p)}">${esc(p)}</td>`+
       `<td class="meta">${esc(x.client_ip||'')}${x.country?' '+esc(x.country):''}</td>`+
       `<td>${ms}</td><td class="meta">${esc(x.edge_cache_result||'')}</td>`;
     if(key) tr.dataset.key=key;
