@@ -19,20 +19,24 @@ Usage:
 """
 
 import argparse
+import calendar
+import hmac
 import json
 import os
 import re
 import sys
 import time
-import fcntl
+import sqlite3
 import concurrent.futures
 import urllib.request
 import urllib.error
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 API_HOST = os.environ.get("NETLIFY_API_HOST", "https://api.netlify.com")
 HERE     = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_OUT = os.environ.get("NETLIFY_LOG_OUT", os.path.join(HERE, "logs", "access.ndjson"))
+DEFAULT_DB    = os.environ.get("NETLIFY_DB", os.path.join(HERE, "logs", "access.db"))
+LEGACY_NDJSON = os.path.join(HERE, "logs", "access.ndjson")  # auto-imported once if present
 # Production traffic only; no user-agent filter, so all client types are included.
 PROD_BRANCH = "__nf-no-branch-production-traffic"
 PROD_FILTER = [{"field": "Branch", "op": "=", "value": PROD_BRANCH}]
@@ -136,70 +140,118 @@ def enrich_rows(token, site_id, rows, from_ms, to_ms, workers=8):
         list(ex.map(one, rows))
 
 
-def existing_ids(path):
-    seen = set()
-    if os.path.exists(path):
-        with open(path) as f:
-            for line in f:
+def parse_ts_ms(ts):
+    """ISO-8601 UTC timestamp (possibly nanosecond precision) -> epoch milliseconds."""
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?", ts or "")
+    if not m:
+        return 0
+    y, mo, d, h, mi, s = (int(m.group(i)) for i in range(1, 7))
+    ms = int((m.group(7) or "")[:3].ljust(3, "0")) if m.group(7) else 0
+    return calendar.timegm((y, mo, d, h, mi, s, 0, 0, 0)) * 1000 + ms
+
+
+def db_connect(path):
+    """Open (creating if needed) the SQLite store in WAL mode, schema ensured."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    conn = sqlite3.connect(path, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("CREATE TABLE IF NOT EXISTS requests("
+                 "request_id TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL, raw TEXT NOT NULL)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts_ms)")
+    return conn
+
+
+def db_insert(conn, rows):
+    """Insert rows, deduped by request_id PK. Returns the number actually inserted."""
+    before = conn.total_changes
+    conn.executemany(
+        "INSERT OR IGNORE INTO requests(request_id, ts_ms, raw) VALUES(?,?,?)",
+        [(r["request_id"], parse_ts_ms(r.get("timestamp")),
+          json.dumps(r, separators=(",", ":")))
+         for r in rows if r.get("request_id")])
+    conn.commit()
+    return conn.total_changes - before
+
+
+def db_existing(conn, ids):
+    """Subset of ids already in the DB (chunked under SQLite's variable limit)."""
+    have, ids = set(), [i for i in ids if i]
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        q = "SELECT request_id FROM requests WHERE request_id IN (%s)" % ",".join("?" * len(chunk))
+        have.update(r[0] for r in conn.execute(q, chunk).fetchall())
+    return have
+
+
+def maybe_import_legacy(conn):
+    """One-time import of a pre-existing access.ndjson when the DB starts out empty."""
+    if not os.path.exists(LEGACY_NDJSON):
+        return
+    if conn.execute("SELECT 1 FROM requests LIMIT 1").fetchone():
+        return
+    rows = []
+    with open(LEGACY_NDJSON) as f:
+        for line in f:
+            line = line.strip()
+            if line:
                 try:
-                    seen.add(json.loads(line)["request_id"])
+                    rows.append(json.loads(line))
                 except Exception:
                     pass
-    return seen
+    if rows:
+        print(f"imported {db_insert(conn, rows)} rows from {LEGACY_NDJSON}", file=sys.stderr)
 
 
-def do_pull(token, site_id, minutes, out, enrich=True):
-    """Fetch one window; append new rows (deduped by request_id) under a lock."""
+def do_pull(token, site_id, minutes, db_path, enrich=True):
+    """Fetch one window; insert new rows (deduped by request_id) into SQLite."""
     to_ms = int(time.time() * 1000)
     from_ms = to_ms - minutes * 60 * 1000
     rows = fetch_window(token, site_id, from_ms, to_ms)
+    rows.sort(key=lambda r: r.get("timestamp", ""))
 
-    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-    with open(out + ".lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)          # serialize concurrent pulls
-        seen = existing_ids(out)
-        fresh = [r for r in rows if r.get("request_id") not in seen]
-        fresh.sort(key=lambda r: r.get("timestamp", ""))
-        if enrich:                                # add client IP / geo to new rows
-            enrich_rows(token, site_id, fresh, from_ms, to_ms)
-        with open(out, "a") as f:
-            for r in fresh:
-                f.write(json.dumps(r, separators=(",", ":")) + "\n")
-        fcntl.flock(lock, fcntl.LOCK_UN)
+    conn = db_connect(db_path)
+    maybe_import_legacy(conn)
+    if enrich:                                    # enrich only rows we don't already have
+        have = db_existing(conn, [r["request_id"] for r in rows if r.get("request_id")])
+        enrich_rows(token, site_id,
+                    [r for r in rows if r.get("request_id") not in have], from_ms, to_ms)
+    new = db_insert(conn, rows)
+    conn.close()
 
-    return {"window_min": minutes, "seen": len(rows), "new": len(fresh),
-            "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "out": out}
+    return {"window_min": minutes, "seen": len(rows), "new": new,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "out": db_path}
 
 
-def tail_rows(path, n):
-    """Last n rows, newest first, reading only the tail of the file."""
-    if not os.path.exists(path):
-        return []
-    with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        size = f.tell()
-        f.seek(size - min(size, 256 * 1024))
-        data = f.read().decode("utf-8", "replace")
-    lines = [ln for ln in data.splitlines() if ln.strip()]
-    out = []
-    for ln in lines[-n:]:
-        try:
-            out.append(json.loads(ln))
-        except Exception:
-            pass
-    out.reverse()
-    return out
+def query_rows(db_path, from_ms=None, to_ms=None, limit=2000):
+    """Rows in [from_ms, to_ms] (each bound optional), newest first, capped at
+    limit. Returns (rows, total_in_range)."""
+    if not os.path.exists(db_path):
+        return [], 0
+    conn = db_connect(db_path)
+    where, params = [], []
+    if from_ms is not None:
+        where.append("ts_ms >= ?"); params.append(int(from_ms))
+    if to_ms is not None:
+        where.append("ts_ms <= ?"); params.append(int(to_ms))
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    total = conn.execute(f"SELECT COUNT(*) FROM requests {clause}", params).fetchone()[0]
+    cur = conn.execute(f"SELECT raw FROM requests {clause} ORDER BY ts_ms DESC LIMIT ?",
+                       params + [int(limit)])
+    rows = [json.loads(r[0]) for r in cur.fetchall()]
+    conn.close()
+    return rows, total
 
 
 def cmd_pull(args):
     summary = do_pull(resolve_token(args.token_file), resolve_site(args.site),
-                      args.minutes, args.out, enrich=not args.no_ip)
+                      args.minutes, args.db, enrich=not args.no_ip)
     if args.quiet and not summary["new"]:
         return
     print(f"{summary['at']}  window={summary['window_min']}m  "
           f"seen={summary['seen']}  new={summary['new']}  -> {summary['out']}")
     if summary["new"]:
-        rows = tail_rows(args.out, summary["new"])
+        rows, _ = query_rows(args.db, limit=summary["new"])
         by_status, by_path = {}, {}
         for r in rows:
             by_status[r.get("status_code")] = by_status.get(r.get("status_code"), 0) + 1
@@ -208,6 +260,22 @@ def cmd_pull(args):
         print("  status  " + "  ".join(f"{k}:{v}" for k, v in sorted(by_status.items(), key=lambda x: -x[1])))
         for path, c in sorted(by_path.items(), key=lambda x: -x[1])[:8]:
             print(f"  {c:>4}  {path[:90]}")
+
+
+def cmd_import(args):
+    conn = db_connect(args.db)
+    rows = []
+    with open(args.file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    pass
+    new = db_insert(conn, rows)
+    conn.close()
+    print(f"imported {new} new rows ({len(rows)} read) from {args.file} -> {args.db}")
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
@@ -237,6 +305,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #mapwrap{margin:1rem 0;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
  #maphdr{padding:.4rem .7rem;font-size:.8rem;border-bottom:1px solid #1e2430}
  #fit{padding:.05rem .55rem;font-size:.75rem;margin-left:.4rem;background:#313a4f;color:#cdd6f4}
+ #datebar{margin:1rem 0 .3rem;font-size:.85rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+ #datebar select,#datebar input,#datebar button{font:inherit;font-size:.8rem;background:#11151f;border:1px solid #45475a;border-radius:6px;color:#cdd6f4;padding:.12rem .45rem}
+ #datebar #apply{background:#313a4f;cursor:pointer}
  #map{display:block;width:100%;height:auto;background:#0a1020;cursor:grab;touch-action:none}
  #map .land{fill:#1e2430;stroke:#313a4f;stroke-width:.12}
  #map .pin{fill:#89b4fa;fill-opacity:.65;stroke:#0b0e14;stroke-width:.12;cursor:pointer}
@@ -245,6 +316,19 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <h1>access log<span id="host" class="meta"></span></h1>
 <button id="run" onclick="runNow()">Run pull now</button>
 <span id="msg" class="meta">loading&hellip;</span>
+<div id="datebar" class="meta">range
+  <select id="preset">
+    <option value="1">last 1h</option>
+    <option value="24" selected>last 24h</option>
+    <option value="168">last 7d</option>
+    <option value="720">last 30d</option>
+    <option value="0">custom</option>
+    <option value="-1">all</option>
+  </select>
+  <input type="datetime-local" id="from"><span id="dash">&ndash;</span><input type="datetime-local" id="to">
+  <button id="apply">apply</button>
+  <span id="rangemsg"></span>
+</div>
 <div id="filterbar">
   <span id="filters"></span>
   <input id="addf" placeholder="+ filter, e.g. /blog* &#8629;">
@@ -376,11 +460,31 @@ function siteHost(){             // derive the site host from the data (no hardc
   for(const x of ROWS){ if(x.url){ try{return new URL(x.url).host;}catch(e){} } }
   return '';
 }
+function rangeMs(){              // -> {from,to} epoch ms from the preset / custom inputs
+  const p=document.querySelector('#preset').value;
+  if(p==='-1') return {from:null,to:null};                 // all time
+  if(p==='0'){                                             // custom (datetime-local is local tz)
+    const f=document.querySelector('#from').value, t=document.querySelector('#to').value;
+    return {from:f?new Date(f).getTime():null, to:t?new Date(t).getTime():null};
+  }
+  return {from:Date.now()-(+p)*3600*1000, to:null};        // last N hours
+}
+function syncDateInputs(){       // custom inputs only matter for the "custom" preset
+  const custom=document.querySelector('#preset').value==='0';
+  ['#from','#dash','#to','#apply'].forEach(s=>document.querySelector(s).style.display=custom?'':'none');
+}
 async function load(){
-  const r=await fetch(BASE+'/recent?n=500');ROWS=await r.json();
+  const {from,to}=rangeMs();
+  const qs=new URLSearchParams({limit:5000});
+  if(from!=null) qs.set('from',Math.floor(from));
+  if(to!=null)   qs.set('to',Math.floor(to));
+  const j=await (await fetch(BASE+'/query?'+qs)).json();
+  ROWS=j.rows||[];
   const host=siteHost();
   document.querySelector('#host').textContent=host?' \\u00b7 '+host:'';
   if(host) document.title='access log \\u00b7 '+host;
+  document.querySelector('#rangemsg').textContent =
+    (j.total>ROWS.length) ? ('\\u00b7 newest '+ROWS.length+' of '+j.total+' \\u2014 narrow the range for more') : '';
   render();
 }
 async function runNow(){
@@ -425,6 +529,11 @@ mapSvg.addEventListener('click',e=>{
 });
 document.querySelector('#fit').onclick=resetView;
 document.querySelector('#th-time').textContent='time ('+TZ+')';
+document.querySelector('#preset').addEventListener('change',()=>{
+  syncDateInputs(); if(document.querySelector('#preset').value!=='0') load();
+});
+document.querySelector('#apply').addEventListener('click',load);
+syncDateInputs();
 fetch(BASE+'/world').then(r=>r.json()).then(w=>{WORLD=w;render();}).catch(()=>{});
 renderChips();load();setInterval(load,30000);
 </script></body></html>"""
@@ -460,13 +569,24 @@ def make_handler(args, token, site_id):
             pass
 
         def do_GET(self):
+            if not self._host_ok():
+                return self._send(403, json.dumps(
+                    {"error": "unexpected Host header; start with --allow-host <name> if you front this with a proxy"}))
             # Match by suffix so we work at the root or under any mount path,
             # whether or not the proxy strips its prefix.
             path = self.path.split("?")[0].rstrip("/")
-            if path.endswith("/recent"):
-                m = re.search(r"[?&]n=(\d+)", self.path)
-                n = min(int(m.group(1)) if m else 150, 1000)
-                return self._send(200, json.dumps(tail_rows(args.out, n)))
+            if path.endswith("/query"):
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                def g(k):
+                    v = (qs.get(k) or [None])[0]
+                    return int(v) if v not in (None, "") else None
+                try:
+                    limit = min(g("limit") or 2000, 20000)
+                    from_ms, to_ms = g("from"), g("to")
+                except ValueError:
+                    return self._send(400, json.dumps({"error": "from/to/limit must be integers"}))
+                rows, total = query_rows(args.db, from_ms, to_ms, limit)
+                return self._send(200, json.dumps({"rows": rows, "total": total, "limit": limit}))
             if path.endswith("/world"):     # vendored equirectangular land outline
                 wp = os.path.join(HERE, "world.json")
                 if os.path.exists(wp):
@@ -482,7 +602,7 @@ def make_handler(args, token, site_id):
                 return self._send(403, json.dumps({"error": "forbidden"}))
             try:
                 self._send(200, json.dumps(do_pull(token, site_id, args.minutes,
-                                                    args.out, enrich=not args.no_ip)))
+                                                    args.db, enrich=not args.no_ip)))
             except SystemExit as e:
                 self._send(500, json.dumps({"error": str(e)}))
     return H
@@ -491,9 +611,10 @@ def make_handler(args, token, site_id):
 def cmd_serve(args):
     token = resolve_token(args.token_file)
     site_id = resolve_site(args.site)
+    conn = db_connect(args.db); maybe_import_legacy(conn); conn.close()
     httpd = ThreadingHTTPServer((args.host, args.port), make_handler(args, token, site_id))
     print(f"serving on http://{args.host}:{args.port}  "
-          f"(window {args.minutes}m, out {args.out})", flush=True)
+          f"(window {args.minutes}m, db {args.db})", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -504,10 +625,10 @@ def main():
     ap = argparse.ArgumentParser(description="Pull Netlify per-request access logs.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("pull", help="fetch one window, append deduped NDJSON")
+    p = sub.add_parser("pull", help="fetch one window, insert deduped into SQLite")
     p.add_argument("--site", help="Netlify site id (or set NETLIFY_SITE_ID)")
     p.add_argument("--minutes", type=int, default=20)
-    p.add_argument("--out", default=DEFAULT_OUT)
+    p.add_argument("--db", default=DEFAULT_DB)
     p.add_argument("--token-file")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--no-ip", action="store_true", help="skip per-request IP/geo enrichment")
@@ -518,7 +639,7 @@ def main():
     s.add_argument("--host", default="127.0.0.1", help="bind address")
     s.add_argument("--port", type=int, default=8800)
     s.add_argument("--minutes", type=int, default=20)
-    s.add_argument("--out", default=DEFAULT_OUT)
+    s.add_argument("--db", default=DEFAULT_DB)
     s.add_argument("--token-file")
     s.add_argument("--run-secret", default=os.environ.get("RUN_SECRET"))
     s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
@@ -526,6 +647,11 @@ def main():
                         "that keep their own hostname, e.g. tailscale serve")
     s.add_argument("--no-ip", action="store_true", help="skip per-request IP/geo enrichment")
     s.set_defaults(func=cmd_serve)
+
+    im = sub.add_parser("import", help="import an existing access.ndjson into the DB")
+    im.add_argument("file")
+    im.add_argument("--db", default=DEFAULT_DB)
+    im.set_defaults(func=cmd_import)
 
     args = ap.parse_args()
     args.func(args)
