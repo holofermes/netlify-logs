@@ -22,5 +22,5 @@ stdlib SQLite database, deduped by `request_id`.
 - **Date range.** Last 1h / 24h / 7d / 30d, custom, or all.
 - **World map** of request origins. Zoom, pan, fit.
 - **Entry-detail drawer.** Click any row or pin for the full record.
-- **Filter chips.** Click to cycle off → only → hide; add your own URL globs.
+- **Filter chips.** Toggle URL-glob filters on or off; recolor or rename each in place.
 - **Run now.** Pull on demand and refresh.

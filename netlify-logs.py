@@ -252,10 +252,13 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .meta{color:#6c7086}
  #filterbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:1rem 0 .3rem}
  #filters{display:flex;flex-wrap:wrap;gap:.4rem}
- .chip{padding:.15rem .55rem;border:1px solid #45475a;border-radius:999px;cursor:pointer;color:#bac2de;user-select:none;font-size:.85rem;white-space:nowrap}
- .chip.only{border-color:#a6e3a1;color:#a6e3a1}
- .chip.hide{border-color:#f38ba8;color:#f38ba8;text-decoration:line-through}
- .chip .x{margin-left:.4rem;opacity:.55}.chip .x:hover{opacity:1}
+ .chip{padding:.15rem .55rem;border:1px solid #45475a;border-radius:999px;cursor:pointer;color:#bac2de;user-select:none;font-size:.85rem;white-space:nowrap;display:inline-flex;align-items:center}
+ .chip:not(.on){opacity:.55}
+ .chip .sw{width:.62rem;height:.62rem;border-radius:50%;margin-right:.4rem;flex:none;cursor:pointer}
+ .chip .sw:hover{box-shadow:0 0 0 2px #ffffff66}
+ .chip .lbl.editing{outline:none;border-bottom:1px dashed currentColor;cursor:text;min-width:1ch}
+ .chip .ed{margin-left:.35rem;opacity:.45;cursor:pointer;font-size:.78rem}.chip .ed:hover{opacity:1}
+ .chip .x{margin-left:.3rem;opacity:.5;cursor:pointer}.chip .x:hover{opacity:1}
  #addf{font:inherit;background:#11151f;border:1px solid #45475a;border-radius:999px;color:#cdd6f4;padding:.15rem .6rem;width:13rem}
  tbody tr{cursor:pointer}tbody tr:hover{background:#11151f}
  #detail{position:fixed;top:0;right:0;height:100%;width:min(480px,92vw);background:#11151f;border-left:1px solid #1e2430;padding:1rem 1.2rem;overflow:auto;transform:translateX(105%);transition:transform .15s;box-shadow:-8px 0 24px #0008}
@@ -266,7 +269,13 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #detail pre{background:#0b0e14;padding:.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-all}
  .cls{background:#45475a;color:#cdd6f4;margin-bottom:.5rem}
  #mapwrap{margin:1rem 0;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
- #maphdr{padding:.4rem .7rem;font-size:.8rem;border-bottom:1px solid #1e2430}
+ #maphdr{padding:.4rem .7rem;font-size:.8rem;border-bottom:1px solid #1e2430;cursor:pointer;user-select:none}
+ #maphdr:hover{background:#11151f}
+ #mapcaret{cursor:pointer;user-select:none;display:inline-block;width:1rem;text-align:center}
+ #cpick{position:absolute;left:-9999px;width:0;height:0;opacity:0}
+ #pager{display:none;gap:.7rem;align-items:center;margin:.6rem 0;font-size:.85rem;color:#6c7086}
+ #pager button{font:inherit;font-size:.8rem;padding:.1rem .55rem;background:#313a4f;color:#cdd6f4;border:0;border-radius:6px;cursor:pointer}
+ #pager button:disabled{opacity:.4;cursor:default}
  #fit{padding:.05rem .55rem;font-size:.75rem;margin-left:.4rem;background:#313a4f;color:#cdd6f4}
  #datebar{margin:1rem 0 .3rem;font-size:.85rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
  #datebar select,#datebar input,#datebar button{font:inherit;font-size:.8rem;background:#11151f;border:1px solid #45475a;border-radius:6px;color:#cdd6f4;padding:.12rem .45rem}
@@ -274,7 +283,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #map{display:block;width:100%;height:auto;background:#0a1020;cursor:grab;touch-action:none}
  #map .land{fill:#1e2430;stroke:#313a4f;stroke-width:.12}
  #map .pin{fill:#89b4fa;fill-opacity:.65;stroke:#0b0e14;stroke-width:.12;cursor:pointer}
- #map .pin:hover{fill:#f9e2af;fill-opacity:.95}
+ #map .pin:hover,#map .pin.ping{fill:#f9e2af;fill-opacity:1;stroke:#fff;stroke-width:.4}
+ #map .pin.sel{fill:#f38ba8;fill-opacity:1;stroke:#fff;stroke-width:.5}
 </style></head><body>
 <h1>access log<span id="host" class="meta"></span></h1>
 <button id="run" onclick="runNow()">Run pull now</button>
@@ -296,8 +306,10 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   <span id="filters"></span>
   <input id="addf" placeholder="+ filter, e.g. /blog* &#8629;">
 </div>
-<div class="meta" style="font-size:.8rem">click a chip to cycle off &rarr; only &rarr; hide &middot; click a row for full detail</div>
-<div id="mapwrap"><div id="maphdr" class="meta">map &middot; <span id="mapcount">0 locations</span> &middot; scroll to zoom, drag to pan<button id="fit">fit</button></div><svg id="map" preserveAspectRatio="xMidYMid meet"></svg></div>
+<div class="meta" style="font-size:.8rem">click a chip to toggle its filter &middot; dot recolors, &#9998; renames &middot; click a row for full detail</div>
+<div id="mapwrap"><div id="maphdr" class="meta"><span id="mapcaret">&#9662;</span> map &middot; <span id="mapcount">0 locations</span></div><svg id="map" preserveAspectRatio="xMidYMid meet"></svg></div>
+<input type="color" id="cpick">
+<div id="pager"></div>
 <table id="t"><thead><tr><th id="th-time">time</th><th>st</th><th>method</th><th>url</th><th>ip</th><th>ms</th><th>cache</th></tr></thead><tbody></tbody></table>
 <div id="detail"></div>
 <script>
@@ -325,24 +337,65 @@ function globToRe(p){          // substring glob: * -> .*, metachars escaped
   return new RegExp(s,'i');
 }
 const DEF=[];   // no seeded filters; add your own via the box (saved per browser)
+const PALETTE=['#f38ba8','#fab387','#f9e2af','#a6e3a1','#94e2d5','#89b4fa','#cba6f7','#f5c2e7','#eba0ac','#74c7ec'];
+const pickColor=()=>PALETTE[Math.floor(Math.random()*PALETTE.length)];
 let filters;
 try{filters=JSON.parse(localStorage.getItem('nf_filters'))||DEF;}catch(e){filters=DEF;}
 const saveF=()=>{try{localStorage.setItem('nf_filters',JSON.stringify(filters));}catch(e){/* storage blocked (private mode); filters just don't persist */}};
 let ROWS=[];
+filters.forEach(f=>{                 // migrate older saved chips: tri-state m -> on/off, ensure color
+  if(f.on===undefined) f.on = (f.m==='only');
+  delete f.m;
+  if(!f.c) f.c=pickColor();
+});
 
 function renderChips(){
+  PAGE_N=0;                          // any chip change resets to the first page
   const c=document.querySelector('#filters');c.innerHTML='';
   filters.forEach((f,i)=>{
+    if(!f.c) f.c=pickColor();
     const el=document.createElement('span');
-    el.className='chip '+f.m;el.textContent=f.p;
-    el.title='click: off \\u2192 only \\u2192 hide';
-    el.onclick=()=>{f.m={off:'only',only:'hide',hide:'off'}[f.m];saveF();renderChips();render();};
-    const x=document.createElement('b');x.textContent='\\u00d7';x.className='x';
+    el.className='chip'+(f.on?' on':'');
+    el.style.borderColor=f.c; el.style.color=f.c;                  // the chip's own color
+    el.style.background = f.on ? f.c+'2e' : 'transparent';         // tinted fill when active
+    el.title='click to toggle this filter';
+    const sw=document.createElement('b');sw.className='sw';sw.style.background=f.c;sw.title='change color';
+    sw.onclick=e=>{e.stopPropagation();editColor(i);};
+    const lbl=document.createElement('span');lbl.className='lbl';lbl.textContent=f.p;
+    lbl.onclick=e=>{if(lbl.isContentEditable)e.stopPropagation();};   // don't toggle while editing
+    lbl.ondblclick=e=>{e.stopPropagation();editText(i,lbl);};
+    const ed=document.createElement('b');ed.className='ed';ed.textContent='\\u270e';ed.title='rename';
+    ed.onclick=e=>{e.stopPropagation();editText(i,lbl);};
+    const x=document.createElement('b');x.textContent='\\u00d7';x.className='x';x.title='remove';
     x.onclick=e=>{e.stopPropagation();filters.splice(i,1);saveF();renderChips();render();};
-    el.appendChild(x);c.appendChild(el);
+    el.onclick=()=>{f.on=!f.on;saveF();renderChips();render();};
+    el.append(sw,lbl,ed,x);c.appendChild(el);
   });
 }
+function editColor(i){             // native picker for one chip; live-preview, then persist
+  const inp=document.querySelector('#cpick');
+  inp.value=filters[i].c;
+  inp.oninput =e=>{filters[i].c=e.target.value;renderChips();};
+  inp.onchange=e=>{filters[i].c=e.target.value;saveF();renderChips();render();};
+  inp.click();
+}
+function editText(i,lbl){          // rename the pattern in place (underlined while editing)
+  lbl.contentEditable='true'; lbl.classList.add('editing'); lbl.focus();
+  const r=document.createRange(); r.selectNodeContents(lbl);
+  const s=getSelection(); s.removeAllRanges(); s.addRange(r);
+  lbl.onkeydown=e=>{
+    if(e.key==='Enter'){e.preventDefault();lbl.blur();}
+    if(e.key==='Escape'){lbl.textContent=filters[i].p;lbl.blur();}
+  };
+  lbl.onblur=()=>{
+    const v=lbl.textContent.trim();
+    lbl.contentEditable='false'; lbl.classList.remove('editing');
+    if(v && v!==filters[i].p){filters[i].p=v;saveF();renderChips();render();}
+    else lbl.textContent=filters[i].p;
+  };
+}
 const matchAny=(list,path)=>list.some(f=>globToRe(f.p).test(path));
+const PAGE_SIZE=100; let PAGE_N=0;              // table pagination (map/filters still see all)
 let WORLD=null, AGG=[], VIEW={s:1,tx:0,ty:0};   // VIEW persists across redraws
 function applyView(){
   const g=document.querySelector('#vp');
@@ -360,7 +413,7 @@ function drawMap(rows){          // pins by lat/lon on the vendored equirectangu
     if(x.latitude==null||x.longitude==null) continue;
     const k=(+x.latitude).toFixed(1)+','+(+x.longitude).toFixed(1);
     let a=m.get(k);
-    if(!a){a={lat:+x.latitude,lon:+x.longitude,n:0,row:x,
+    if(!a){a={key:k,lat:+x.latitude,lon:+x.longitude,n:0,row:x,
               where:[x.region,x.country].filter(Boolean).join(', ')};m.set(k,a);}
     a.n++;                       // rows are newest-first, so the first seen stays as sample
   }
@@ -369,36 +422,60 @@ function drawMap(rows){          // pins by lat/lon on the vendored equirectangu
   let h='<g id="vp"><rect x="0" y="0" width="360" height="180" fill="#0a1020"/><path class="land" d="'+WORLD.d+'"/>';
   AGG.forEach((a,i)=>{
     const cx=a.lon+180, cy=90-a.lat, r=Math.min(0.8+Math.sqrt(a.n),5);
-    h+=`<circle class="pin" data-i="${i}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}">`+
+    h+=`<circle class="pin" data-i="${i}" data-key="${a.key}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}">`+
        `<title>${esc(a.where||'?')} \\u00b7 ${a.n} req</title></circle>`;
   });
   svg.innerHTML=h+'</g>';
   applyView();                   // re-apply current zoom/pan after the rebuild
   document.querySelector('#mapcount').textContent=AGG.length+' location'+(AGG.length===1?'':'s');
 }
+let SEL='';
+const pinByKey=k=>k?document.querySelector('#map .pin[data-key="'+k+'"]'):null;
+function pingPin(k,on){const p=pinByKey(k);if(p)p.classList.toggle('ping',on);}
+function selectPin(k){                            // mark one location selected (persists across redraws)
+  SEL = (k===undefined) ? SEL : k;
+  document.querySelectorAll('#map .pin.sel').forEach(p=>p.classList.remove('sel'));
+  const p=pinByKey(SEL); if(p)p.classList.add('sel');
+}
+const locKey=x=>(x.latitude!=null&&x.longitude!=null)?((+x.latitude).toFixed(1)+','+(+x.longitude).toFixed(1)):'';
 function render(){
-  const onlies=filters.filter(f=>f.m==='only'),hides=filters.filter(f=>f.m==='hide');
-  const vis=ROWS.filter(x=>{
-    const path=pathOf(x.url);
-    if(onlies.length && !matchAny(onlies,path)) return false;
-    if(hides.length && matchAny(hides,path)) return false;
-    return true;
-  });
+  const active=filters.filter(f=>f.on && f.p);                 // on-chips show only their matches (OR)
+  const vis = active.length ? ROWS.filter(x=>matchAny(active,pathOf(x.url))) : ROWS;
+  const tags=active.map(f=>({rx:globToRe(f.p),c:f.c}));   // only ON chips color the url
+  const colorFor=path=>{for(const t of tags){if(t.rx.test(path))return t.c;}return '';};
+  drawMap(vis); selectPin();                      // map + selection use the FULL filtered set
+  const pages=Math.max(1,Math.ceil(vis.length/PAGE_SIZE));
+  PAGE_N=Math.min(Math.max(PAGE_N,0),pages-1);    // clamp (data may have shrunk)
+  const start=PAGE_N*PAGE_SIZE, pageRows=vis.slice(start,start+PAGE_SIZE);
   const tb=document.querySelector('#t tbody');tb.innerHTML='';
-  for(const x of vis){
+  for(const x of pageRows){                       // render only the current page
     const st=(''+x.status_code),cls='s'+st[0],ms=x.duration_ns?Math.round(x.duration_ns/1e6):'';
+    const p=pathOf(x.url), cc=colorFor(p), key=locKey(x);
     const tr=document.createElement('tr');
     tr.innerHTML=`<td class="meta">${fmtLocal(x.timestamp)}</td>`+
       `<td class="${cls}">${st}</td><td>${esc(x.method||'')}</td>`+
-      `<td class="url">${esc(pathOf(x.url))}</td>`+
+      `<td class="url"${cc?' style="color:'+cc+'"':''}>${esc(p)}</td>`+
       `<td class="meta">${esc(x.client_ip||'')}${x.country?' '+esc(x.country):''}</td>`+
       `<td>${ms}</td><td class="meta">${esc(x.edge_cache_result||'')}</td>`;
-    tr.onclick=()=>showDetail(x);
+    if(key) tr.dataset.key=key;
+    tr.onmouseenter=()=>pingPin(key,true);
+    tr.onmouseleave=()=>pingPin(key,false);
+    tr.onclick=()=>{showDetail(x);selectPin(key);};
     tb.appendChild(tr);
   }
-  drawMap(vis);
-  const f=onlies.length||hides.length?' (filtered)':'';
+  renderPager(vis.length,pages,start);
+  const f=active.length?' (filtered)':'';
   document.querySelector('#msg').textContent=vis.length+' / '+ROWS.length+' requests'+f;
+}
+function setPage(n){PAGE_N=n;render();}
+function renderPager(total,pages,start){
+  const pg=document.querySelector('#pager');
+  if(total<=PAGE_SIZE){pg.style.display='none';return;}
+  pg.style.display='flex';pg.innerHTML='';
+  const mk=(t,fn,dis)=>{const b=document.createElement('button');b.textContent=t;b.disabled=dis;b.onclick=fn;return b;};
+  const lbl=document.createElement('span');
+  lbl.textContent=`page ${PAGE_N+1} / ${pages} \\u00b7 rows ${start+1}\\u2013${Math.min(start+PAGE_SIZE,total)} of ${total}`;
+  pg.append(mk('\\u2039 prev',()=>setPage(PAGE_N-1),PAGE_N===0), lbl, mk('next \\u203a',()=>setPage(PAGE_N+1),PAGE_N>=pages-1));
 }
 function showDetail(x){
   const ms=x.duration_ns?(x.duration_ns/1e6).toFixed(1)+' ms':'';
@@ -461,7 +538,7 @@ async function runNow(){
 }
 document.querySelector('#addf').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.value.trim()){
-    filters.push({p:e.target.value.trim(),m:'only'});e.target.value='';saveF();renderChips();render();
+    filters.push({p:e.target.value.trim(),on:true,c:pickColor()});e.target.value='';saveF();renderChips();render();
   }
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')hideDetail();});
@@ -488,14 +565,21 @@ window.addEventListener('mouseup',()=>{drag=null;mapSvg.style.cursor='';});
 mapSvg.addEventListener('click',e=>{
   if(moved){moved=false;return;}                              // a pan-drag is not a pin click
   const c=e.target.closest('.pin'); if(!c) return;
-  const a=AGG[+c.dataset.i]; if(a) showDetail(a.row);
+  const a=AGG[+c.dataset.i]; if(a){showDetail(a.row);selectPin(a.key);}
 });
-document.querySelector('#fit').onclick=resetView;
+mapSvg.addEventListener('dblclick',resetView);                // double-click resets zoom/pan
+let mapHidden=false; try{mapHidden=localStorage.getItem('nf_map_hidden')==='1';}catch(e){/* no storage */}
+function applyMap(){
+  document.querySelector('#map').style.display=mapHidden?'none':'';
+  document.querySelector('#mapcaret').textContent=mapHidden?'\\u25b8':'\\u25be';   // > or v
+}
+document.querySelector('#maphdr').onclick=()=>{mapHidden=!mapHidden;try{localStorage.setItem('nf_map_hidden',mapHidden?'1':'0');}catch(e){/* no storage */}applyMap();};
+applyMap();
 document.querySelector('#th-time').textContent='time ('+TZ+')';
 document.querySelector('#preset').addEventListener('change',()=>{
-  syncDateInputs(); if(document.querySelector('#preset').value!=='0') load();
+  PAGE_N=0; syncDateInputs(); if(document.querySelector('#preset').value!=='0') load();
 });
-document.querySelector('#apply').addEventListener('click',load);
+document.querySelector('#apply').addEventListener('click',()=>{PAGE_N=0;load();});
 syncDateInputs();
 fetch(BASE+'/world').then(r=>r.json()).then(w=>{WORLD=w;render();}).catch(()=>{});
 renderChips();load();setInterval(load,30000);
