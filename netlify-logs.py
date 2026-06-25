@@ -253,6 +253,8 @@ def cmd_pull(args):
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
 <title>access log</title>
 <style>
  html{scrollbar-gutter:stable}      /* always reserve the scrollbar's space so content never shifts */
@@ -319,6 +321,15 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #map .pin{fill-opacity:.75;stroke:#0b0e14;stroke-width:.5;vector-effect:non-scaling-stroke;cursor:pointer;transition:fill-opacity .18s ease-out,stroke .18s ease-out,stroke-width .18s ease-out}
  #map .pin:hover,#map .pin.ping{fill-opacity:.4;stroke:#fff;stroke-width:.5}   /* keep own color, translucent + outlined, brought to front */
  #map .pin.sel{fill-opacity:.5;stroke:#fff;stroke-width:.85}
+ @media (max-width:640px){
+  body{padding:0 .6rem}
+  #top{padding:.6rem 0 .4rem}
+  h1{font-size:1rem}
+  #controls{gap:.35rem .6rem}
+  #twrap{overflow-x:auto;-webkit-overflow-scrolling:touch}   /* swipe the table sideways on small screens */
+  #t{min-width:760px}
+  #detail{width:94vw}
+ }
 </style></head><body>
 <div id="top">
  <h1>access log<span id="host" class="meta"></span></h1>
@@ -349,7 +360,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  <div id="pager"></div>
 </div>
 <input type="color" id="cpick">
-<table id="t"><thead><tr><th id="th-time">time</th><th>st</th><th>method</th><th>url</th><th>ip</th><th>country</th><th>region</th><th>ms</th><th>cache</th></tr></thead><tbody></tbody></table>
+<div id="twrap"><table id="t"><thead><tr><th id="th-time">time</th><th>st</th><th>method</th><th>url</th><th>ip</th><th>country</th><th>region</th><th>ms</th><th>cache</th></tr></thead><tbody></tbody></table></div>
 <div id="scrim"></div>
 <div id="toast"></div>
 <div id="detail"></div>
@@ -716,7 +727,7 @@ mapSvg.addEventListener('click',e=>{
   const a=AGG[+c.dataset.i]; if(a){showDetail(a.row,a);selectPin(a.key);}
 });
 mapSvg.addEventListener('dblclick',resetView);                // double-click resets zoom/pan
-const applyMapH=()=>{mapSvg.style.height=mapH+'px';};         // map height: drag the grip
+const applyMapH=()=>{mapSvg.style.height=Math.min(mapH,Math.round(innerHeight*0.45))+'px';};  // cap at ~45vh so the map never eats a small screen
 (function(){const grip=document.querySelector('#mapgrip');let gy=0,gh=0,on=false;
   grip.addEventListener('mousedown',e=>{e.preventDefault();on=true;gy=e.clientY;gh=mapH;});
   window.addEventListener('mousemove',e=>{if(!on)return;mapH=Math.max(120,Math.min(800,gh+e.clientY-gy));applyMapH();});
