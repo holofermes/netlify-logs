@@ -158,7 +158,18 @@ def db_connect(path):
     conn.execute("CREATE TABLE IF NOT EXISTS requests("
                  "request_id TEXT PRIMARY KEY, ts_ms INTEGER NOT NULL, raw TEXT NOT NULL)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts_ms)")
+    conn.execute("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT)")
     return conn
+
+
+def db_get_setting(conn, key, default=None):
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def db_set_setting(conn, key, value):
+    conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?,?)", (key, value))
+    conn.commit()
 
 
 def db_insert(conn, rows):
@@ -276,6 +287,10 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .chip .ed{margin-left:.35rem;opacity:.45;cursor:pointer;font-size:.78rem}.chip .ed:hover{opacity:1}
  .chip .x{margin-left:.3rem;opacity:.5;cursor:pointer}.chip .x:hover{opacity:1}
  #addf{font:inherit;background:#11151f;border:1px solid #45475a;border-radius:999px;color:#cdd6f4;padding:.15rem .6rem;width:13rem}
+ #tempbar{display:none;flex-wrap:wrap;gap:.4rem;align-items:center;margin:0 0 .6rem}
+ .tpill{padding:.12rem .5rem;border:1px dashed #6c7086;border-radius:6px;color:#bac2de;font-size:.82rem;white-space:nowrap}
+ .tpill .tx{margin-left:.4rem;opacity:.6;cursor:pointer}.tpill .tx:hover{opacity:1}
+ td.fcell{cursor:pointer}td.fcell:hover{background:#313a4f;color:#cdd6f4}
  tbody tr{cursor:pointer}tbody tr:hover{background:#11151f}
  #detail{position:fixed;top:0;right:0;height:100%;width:min(480px,92vw);background:#11151f;border-left:1px solid #1e2430;padding:1rem 1.2rem;overflow:auto;transform:translateX(105%);transition:transform .15s;box-shadow:-8px 0 24px #0008;z-index:6}
  #detail.open{transform:none}
@@ -324,7 +339,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   </span>
   <span id="msg" class="meta">loading&hellip;</span>
  </div>
- <div id="filterbar"><span id="filters"></span><input id="addf" placeholder="+ filter, e.g. /blog* &#8629;"></div>
+ <div id="filterbar"><span id="filters"></span><input id="addf" placeholder="+ url filter, e.g. /blog* &#8629;"></div>
+ <div id="tempbar"></div>
  <div id="mapwrap">
   <div id="maphdr" class="meta"><span id="mapcaret">&#9662;</span> map &middot; <span id="mapcount">0 locations</span></div>
   <svg id="map" preserveAspectRatio="xMidYMid meet"></svg>
@@ -361,18 +377,32 @@ function globToRe(p){          // substring glob: * -> .*, metachars escaped
   }
   return new RegExp(s,'i');
 }
-const DEF=[];   // no seeded filters; add your own via the box (saved per browser)
 const PALETTE=['#f38ba8','#fab387','#f9e2af','#a6e3a1','#94e2d5','#89b4fa','#cba6f7','#f5c2e7','#eba0ac','#74c7ec'];
 const pickColor=()=>PALETTE[Math.floor(Math.random()*PALETTE.length)];
-let filters;
-try{filters=JSON.parse(localStorage.getItem('nf_filters'))||DEF;}catch(e){filters=DEF;}
-const saveF=()=>{try{localStorage.setItem('nf_filters',JSON.stringify(filters));}catch(e){/* storage blocked (private mode); filters just don't persist */}};
+// url filters live in the DB (global). localStorage is just a fast-paint cache.
+let filters=[];
+try{const ls=JSON.parse(localStorage.getItem('nf_filters')); if(Array.isArray(ls)) filters=ls;}catch(e){/* no storage */}
+let saveT;
+function saveF(){                    // cache locally + debounce-save to the server (last write wins)
+  try{localStorage.setItem('nf_filters',JSON.stringify(filters));}catch(e){/* no storage */}
+  clearTimeout(saveT);
+  saveT=setTimeout(()=>fetch(BASE+'/filters',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(filters)}).catch(()=>{}),300);
+}
+function normalizeFilters(){         // default fields the server blob may lack
+  filters.forEach(f=>{ if(f.on===undefined) f.on=false; if(!f.c) f.c=pickColor(); });
+}
+normalizeFilters();
+async function syncFilters(){        // the server is authoritative; migrate local set up if server is empty
+  try{
+    const j=await (await fetch(BASE+'/filters')).json();
+    if(Array.isArray(j) && j.length) filters=j;
+    else if(filters.length) saveF();
+  }catch(e){}
+  normalizeFilters(); renderChips(); render();
+}
 let ROWS=[];
-filters.forEach(f=>{                 // migrate older saved chips: tri-state m -> on/off, ensure color
-  if(f.on===undefined) f.on = (f.m==='only');
-  delete f.m;
-  if(!f.c) f.c=pickColor();
-});
+let TEMP={};                         // transient facet filters: {field: value} (AND across fields, not saved)
 
 function paintChip(i,el){            // toggle one chip in place (no full re-render, so swipe keeps working)
   filters[i].on=!filters[i].on; PAGE_N=0; SOLOED=-1; saveF();   // manual toggle clears solo memory
@@ -512,11 +542,32 @@ function selectPin(k){                            // mark one location selected 
   const p=pinByKey(SEL); if(p){p.classList.add('sel');toFront(p);}
 }
 const locKey=x=>(x.latitude!=null&&x.longitude!=null)?((+x.latitude).toFixed(1)+','+(+x.longitude).toFixed(1)):'';
+const FACET={status:x=>''+x.status_code, method:x=>x.method||'', ip:x=>x.client_ip||'',
+             country:x=>x.country||'', region:x=>x.region||'', cache:x=>x.edge_cache_result||''};
+function toggleFacet(field,val){     // transient click-to-filter; click same value again to clear it
+  if(val==='') return;
+  if(TEMP[field]===val) delete TEMP[field]; else TEMP[field]=val;   // one value per field, AND across fields
+  PAGE_N=0; renderTemp(); render();
+}
+function renderTemp(){
+  const c=document.querySelector('#tempbar'); c.innerHTML='';
+  const keys=Object.keys(TEMP);
+  c.style.display = keys.length ? 'flex' : 'none';
+  keys.forEach(k=>{
+    const el=document.createElement('span'); el.className='tpill'; el.append(k+': '+TEMP[k]);
+    const x=document.createElement('b'); x.className='tx'; x.textContent='\\u00d7';
+    x.onclick=()=>{delete TEMP[k]; PAGE_N=0; renderTemp(); render();};
+    el.appendChild(x); c.appendChild(el);
+  });
+}
 function render(){
-  const active=filters.filter(f=>f.on && f.p);                 // on-chips show only their matches (OR)
-  const vis = active.length ? ROWS.filter(x=>matchAny(active,pathOf(x.url))) : ROWS;
-  const tags=active.map(f=>({rx:globToRe(f.p),c:f.c}));   // only ON chips color the url
+  const active=filters.filter(f=>f.on && f.p);                 // on url-chips show only their matches (OR)
+  const tags=active.map(f=>({rx:globToRe(f.p),c:f.c}));        // on url-chips color the url
   const colorFor=path=>{for(const t of tags){if(t.rx.test(path))return t.c;}return '';};
+  const tkeys=Object.keys(TEMP);                               // transient facets AND-narrow on top
+  const vis = ROWS.filter(x=>
+    (!active.length || matchAny(active,pathOf(x.url))) &&
+    (!tkeys.length || tkeys.every(k=>FACET[k](x)===TEMP[k])));
   drawMap(vis); selectPin();                      // map + selection use the FULL filtered set
   const pages=Math.max(1,Math.ceil(vis.length/PAGE_SIZE));
   PAGE_N=Math.min(Math.max(PAGE_N,0),pages-1);    // clamp (data may have shrunk)
@@ -524,19 +575,22 @@ function render(){
   const tb=document.querySelector('#t tbody');tb.innerHTML='';
   for(const x of pageRows){                       // render only the current page
     const st=(''+x.status_code),cls='s'+st[0],ms=x.duration_ns?Math.round(x.duration_ns/1e6):'';
-    const p=pathOf(x.url), cc=colorFor(p), key=locKey(x);
+    const p=pathOf(x.url), cc=colorFor(p), key=locKey(x), me=esc(x.method||''),
+          ipv=esc(x.client_ip||''), co=esc(x.country||''), rg=esc(x.region||''), ca=esc(x.edge_cache_result||'');
     const tr=document.createElement('tr');
     tr.innerHTML=`<td class="meta">${fmtLocal(x.timestamp)}</td>`+
-      `<td class="${cls}">${st}</td><td>${esc(x.method||'')}</td>`+
+      `<td class="${cls} fcell" data-f="status" data-v="${st}">${st}</td>`+
+      `<td class="fcell" data-f="method" data-v="${me}">${me}</td>`+
       `<td class="url"${cc?' style="color:'+cc+'"':''} title="${esc(p)}">${esc(p)}</td>`+
-      `<td class="meta">${esc(x.client_ip||'')}</td>`+
-      `<td class="meta">${esc(x.country||'')}</td>`+
-      `<td class="meta" title="${esc(x.region||'')}">${esc(x.region||'')}</td>`+
-      `<td>${ms}</td><td class="meta">${esc(x.edge_cache_result||'')}</td>`;
+      `<td class="meta fcell" data-f="ip" data-v="${ipv}">${ipv}</td>`+
+      `<td class="meta fcell" data-f="country" data-v="${co}">${co}</td>`+
+      `<td class="meta fcell" data-f="region" data-v="${rg}" title="${rg}">${rg}</td>`+
+      `<td>${ms}</td>`+
+      `<td class="meta fcell" data-f="cache" data-v="${ca}">${ca}</td>`;
     if(key) tr.dataset.key=key;
     tr.onmouseenter=()=>pingPin(key,true);
     tr.onmouseleave=()=>pingPin(key,false);
-    tr.onclick=()=>{showDetail(x);selectPin(key);};
+    tr.onclick=e=>{const fc=e.target.closest('.fcell'); if(fc){toggleFacet(fc.dataset.f,fc.dataset.v);} else {showDetail(x);selectPin(key);}};
     tb.appendChild(tr);
   }
   renderPager(vis.length,pages,start);
@@ -690,7 +744,7 @@ document.querySelector('#preset').addEventListener('change',()=>{
 document.querySelector('#apply').addEventListener('click',()=>{PAGE_N=0;load();});
 syncDateInputs();
 fetch(BASE+'/world').then(r=>r.json()).then(w=>{WORLD=w;render();}).catch(()=>{});
-renderChips();load();setInterval(load,30000);
+renderChips();renderTemp();syncFilters();load();setInterval(load,30000);
 </script></body></html>"""
 
 
@@ -742,6 +796,11 @@ def make_handler(args, token, site_id):
                     return self._send(400, json.dumps({"error": "from/to/limit must be integers"}))
                 rows, total = query_rows(args.db, from_ms, to_ms, limit)
                 return self._send(200, json.dumps({"rows": rows, "total": total, "limit": limit}))
+            if path.endswith("/filters"):   # the saved url-filter list (global, JSON blob)
+                conn = db_connect(args.db)
+                val = db_get_setting(conn, "url_filters", "[]")
+                conn.close()
+                return self._send(200, val)
             if path.endswith("/world"):     # vendored equirectangular land outline
                 wp = os.path.join(HERE, "world.json")
                 if os.path.exists(wp):
@@ -751,9 +810,28 @@ def make_handler(args, token, site_id):
             return self._send(200, PAGE, "text/html; charset=utf-8")
 
         def do_POST(self):
-            if not self.path.split("?")[0].rstrip("/").endswith("/run"):
+            if not self._host_ok():
+                return self._send(403, json.dumps(
+                    {"error": "unexpected Host header; start with --allow-host <name> if you front this with a proxy"}))
+            p = self.path.split("?")[0].rstrip("/")
+            if p.endswith("/filters"):      # replace the saved url-filter list (last write wins)
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = 0
+                if length > 1_000_000:
+                    return self._send(413, json.dumps({"error": "body too large"}))
+                body = self.rfile.read(length).decode("utf-8", "replace") if length else "[]"
+                try:
+                    json.loads(body)
+                except Exception:
+                    return self._send(400, json.dumps({"error": "invalid json"}))
+                conn = db_connect(args.db); db_set_setting(conn, "url_filters", body); conn.close()
+                return self._send(200, json.dumps({"ok": True}))
+            if not p.endswith("/run"):
                 return self._send(404, "{}")
-            if args.run_secret and self.headers.get("X-Run-Secret") != args.run_secret:
+            if args.run_secret and not hmac.compare_digest(
+                    self.headers.get("X-Run-Secret") or "", args.run_secret):
                 return self._send(403, json.dumps({"error": "forbidden"}))
             try:
                 self._send(200, json.dumps(do_pull(token, site_id, args.minutes,
