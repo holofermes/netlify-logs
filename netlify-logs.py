@@ -323,11 +323,13 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #map .pin.sel{fill-opacity:.5;stroke:#fff;stroke-width:.85}
  @media (max-width:640px){
   body{padding:0 .6rem}
-  #top{padding:.6rem 0 .4rem}
+  #top{position:static;padding:.6rem 0 .4rem}              /* don't pin a tall header on a small screen */
   h1{font-size:1rem}
   #controls{gap:.35rem .6rem}
-  #twrap{overflow-x:auto;-webkit-overflow-scrolling:touch}   /* swipe the table sideways on small screens */
+  #msg{margin-left:0;flex-basis:100%;text-align:left}      /* count on its own line, stable width */
+  #twrap{overflow-x:auto;-webkit-overflow-scrolling:touch} /* swipe the table sideways on small screens */
   #t{min-width:760px}
+  thead th{position:static}                                /* header sits under the map, not floating */
   #detail{width:94vw}
  }
 </style></head><body>
