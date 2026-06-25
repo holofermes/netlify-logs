@@ -264,7 +264,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #filters{display:contents}
  .chip .gr{cursor:grab;opacity:.4;margin-right:.3rem;flex:none;font-size:.8rem}.chip .gr:hover{opacity:.9}
  .chip.dragging{opacity:.15;pointer-events:none}
- .chip .so{margin-right:.4rem;opacity:.55;cursor:pointer;font-size:1rem;line-height:1;display:inline-flex;align-items:center;align-self:center}.chip .so:hover{opacity:1}
+ .chip .so{width:.85rem;height:.85rem;box-sizing:border-box;border:2px solid currentColor;border-radius:50%;margin-right:.4rem;flex:none;opacity:.55;cursor:pointer;position:relative}
+ .chip .so::after{content:"";position:absolute;inset:.18rem;border-radius:50%;background:currentColor}
+ .chip .so:hover{opacity:1}
  .chip{padding:.15rem .55rem;border:1px solid #45475a;border-radius:999px;cursor:pointer;color:#bac2de;user-select:none;font-size:.85rem;white-space:nowrap;display:inline-flex;align-items:center}
  .chip:not(.on){border-style:dashed}
  .chip.on{box-shadow:inset 0 0 0 1px currentColor}
@@ -411,7 +413,7 @@ function renderChips(){
     sw.onmousedown=e=>e.stopPropagation(); sw.onclick=e=>{e.stopPropagation();editColor(i);};
     const lbl=document.createElement('span');lbl.className='lbl';lbl.textContent=f.p;
     lbl.onclick=e=>{if(lbl.isContentEditable)e.stopPropagation();};
-    const so=ctl('so','\\u25c9','solo (only this)'); so.onclick=e=>{e.stopPropagation();soloChip(i);};
+    const so=ctl('so','','solo (only this)'); so.onclick=e=>{e.stopPropagation();soloChip(i);};   // CSS-drawn ring
     const ed=ctl('ed','\\u270e','rename');           ed.onclick=e=>{e.stopPropagation();editText(i,lbl);};
     const x =ctl('x','\\u00d7','remove');            x.onclick=e=>{e.stopPropagation();filters.splice(i,1);SOLOED=-1;saveF();renderChips();render();};
     el.onmousedown=e=>{if(e.button===0){SWIPE=true;paintChip(i,el);}};   // tap or start of a swipe
