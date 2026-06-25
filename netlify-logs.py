@@ -301,7 +301,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #datebar #apply{background:#313a4f;cursor:pointer}
  #map{display:block;width:100%;height:340px;background:#0a1020;cursor:grab;touch-action:none}
  #map .land{fill:#1e2430;stroke:#313a4f;stroke-width:.12}
- #map .pin{fill-opacity:.75;stroke:#0b0e14;stroke-width:.12;cursor:pointer;transition:fill-opacity .18s ease-out,stroke .18s ease-out,stroke-width .18s ease-out}
+ #map .pin{fill-opacity:.75;stroke:#0b0e14;stroke-width:.5;vector-effect:non-scaling-stroke;cursor:pointer;transition:fill-opacity .18s ease-out,stroke .18s ease-out,stroke-width .18s ease-out}
  #map .pin:hover,#map .pin.ping{fill-opacity:.4;stroke:#fff;stroke-width:.5}   /* keep own color, translucent + outlined, brought to front */
  #map .pin.sel{fill-opacity:.5;stroke:#fff;stroke-width:.85}
 </style></head><body>
@@ -456,9 +456,14 @@ let SWIPE=false, DRAGI=-1;                      // chip swipe-toggle + drag-reor
 let SOLOED=-1, PRESOLO=null;                    // solo memory: which chip is soloed + states to restore
 let mapH=340; try{const v=+localStorage.getItem('nf_map_h'); if(v)mapH=v;}catch(e){/* no storage */}
 let WORLD=null, AGG=[], VIEW={s:1,tx:0,ty:0};   // VIEW persists across redraws
+let _pinS=0;
 function applyView(){
   const g=document.querySelector('#vp');
   if(g) g.setAttribute('transform',`translate(${VIEW.tx} ${VIEW.ty}) scale(${VIEW.s})`);
+  if(VIEW.s!==_pinS){           // counter-scale pin radius so dots stay constant on-screen (shrink as you zoom in)
+    _pinS=VIEW.s; const r=(1.7/VIEW.s).toFixed(2);
+    document.querySelectorAll('#map .pin').forEach(p=>p.setAttribute('r',r));
+  }
 }
 function resetView(){VIEW={s:1,tx:0,ty:0};applyView();}   // "fit": back to whole world
 function svgPt(svg,ev){          // client px -> viewBox coords (ignores the group transform)
@@ -483,8 +488,8 @@ function drawMap(rows){          // pins by lat/lon on the vendored equirectangu
   svg.setAttribute('viewBox',WORLD.viewBox);
   let h='<g id="vp"><rect x="0" y="0" width="360" height="180" fill="#0a1020"/><path class="land" d="'+WORLD.d+'"/>';
   AGG.forEach((a,i)=>{
-    const cx=a.lon+180, cy=90-a.lat, r=1.7;       // uniform size; the count is in the hover title
-    h+=`<circle class="pin" data-i="${i}" data-key="${a.key}" fill="${a.color||'#89b4fa'}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}">`+
+    const cx=a.lon+180, cy=90-a.lat, r=1.7/VIEW.s;  // uniform, counter-scaled to the zoom; count is in the hover title
+    h+=`<circle class="pin" data-i="${i}" data-key="${a.key}" fill="${a.color||'#89b4fa'}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(2)}">`+
        `<title>${esc(a.where||'?')} \\u00b7 ${a.n} req</title></circle>`;
   });
   svg.innerHTML=h+'</g>';
