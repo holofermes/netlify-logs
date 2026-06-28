@@ -258,27 +258,46 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <title>access log</title>
 <style>
  html{scrollbar-gutter:stable}      /* always reserve the scrollbar's space so content never shifts */
+ *{scrollbar-width:thin;scrollbar-color:#313a4f #0b0e14}   /* Firefox: themed thin scrollbar */
+ ::-webkit-scrollbar{width:10px;height:10px}
+ ::-webkit-scrollbar-track{background:#0b0e14}
+ ::-webkit-scrollbar-thumb{background:#313a4f;border-radius:6px;border:2px solid #0b0e14}
+ ::-webkit-scrollbar-thumb:hover{background:#45475a}
+ ::-webkit-scrollbar-corner{background:#0b0e14}
  body{font:14px/1.4 ui-monospace,Menlo,monospace;margin:0;padding:0 2rem 2rem;background:#0b0e14;color:#cdd6f4}
  #top{position:sticky;top:0;z-index:5;background:#0b0e14;padding:1rem 0 .5rem;border-bottom:1px solid #1e2430}
  #controls{display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center;margin:.55rem 0 .65rem}
  h1{font-size:1.1rem;margin:0}button{font:inherit;padding:.3rem .8rem;background:#89b4fa;color:#0b0e14;border:0;border-radius:6px;cursor:pointer}
  button:disabled{opacity:.5}#msg{color:#a6e3a1;margin-left:auto;text-align:right}
- #twrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
- table{border-collapse:collapse;margin-top:1rem;table-layout:fixed}
- td,th{padding:.2rem .6rem;text-align:left;border-bottom:1px solid #1e2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
- thead th{position:sticky;top:var(--toph,0);background:#0b0e14;z-index:3;box-shadow:inset 0 -1px 0 #1e2430;user-select:none}
- th .hl{cursor:pointer}                         /* header label: click to filter, drag to reorder */
+ #twrap{overflow:auto;max-height:calc(100vh - var(--toph,0) - 1rem)}   /* table scrolls inside; top + header stay put */
+ table{border-collapse:collapse;table-layout:fixed}
+ td,th{padding:.2rem .6rem;text-align:left;border-bottom:1px solid #1e2430;border-right:1px solid #1e2430;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
+ thead th{position:sticky;top:0;background:#0b0e14;z-index:3;box-shadow:inset 0 -1px 0 #1e2430;user-select:none}
+ th .hcell{display:flex;align-items:center;overflow:hidden}
+ th .hl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ th .hl.f{cursor:pointer}                        /* only filterable headers click to filter */
  th.filt .hl{color:#89b4fa}
- th .hx{margin-left:.3rem;opacity:.55;cursor:pointer}th .hx:hover{opacity:1}
+ thead th.colfilt{background:#16263f}          /* filtered column: tint header + cells */
+ td.colfilt{background:#89b4fa20}
+ tbody tr:hover td.colfilt{background:#89b4fa33}
+ th .hx{flex:none;margin-left:.3rem;padding:0 .3rem;opacity:.7;cursor:pointer;position:relative;z-index:3}th .hx:hover{opacity:1}  /* above the resize grip so it stays clickable */
  th input.hf{font:inherit;width:6.5rem;background:#11151f;border:1px solid #89b4fa;border-radius:4px;color:#cdd6f4;padding:0 .25rem}
- th .rsz{position:absolute;right:0;top:0;width:9px;height:100%;cursor:col-resize;touch-action:none}
+ th .rsz{position:absolute;right:0;top:0;width:20px;height:100%;cursor:col-resize;touch-action:none;z-index:2;display:flex;align-items:center;justify-content:flex-end}
+ th .rsz::before{content:"";width:3px;height:60%;border-radius:2px;background:#45475a;margin-right:2px}
+ th .rsz:hover::before,th .rsz.act::before{background:#89b4fa}
+ th .rsz:hover{background:#89b4fa}               /* visible grab affordance on the divider */
  th.dragging{opacity:.35}
- tbody td:hover{color:#cdd6f4;text-decoration:underline}   /* cells read as links to the detail */
+ tbody td.fc{cursor:pointer}                     /* only filterable cells click to filter */
+ tbody td.fc:hover{background:#313a4f;color:#cdd6f4;text-decoration:underline}
  #toast{position:fixed;bottom:1rem;right:1rem;background:#11151f;border:1px solid #313a4f;color:#a6e3a1;padding:.4rem .8rem;border-radius:8px;font-size:.85rem;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none;z-index:7}
  #toast.show{opacity:1;transform:none}
  td.url{color:#94e2d5}.s2{color:#a6e3a1}.s3{color:#f9e2af}.s4{color:#fab387}.s5{color:#f38ba8}
  .meta{color:#6c7086}
- #filterbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:0 0 .8rem}
+ #filtwrap{margin:0 0 .5rem;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
+ #filthdr{padding:.4rem .7rem;font-size:.8rem;cursor:pointer;user-select:none;border-bottom:1px solid #1e2430}
+ #filthdr:hover{background:#11151f}
+ #filtcaret{display:inline-block;width:1rem;text-align:center}
+ #filterbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;padding:.5rem .6rem;margin:0}
  #filters{display:contents}
  .chip .gr{cursor:grab;opacity:.4;margin-right:.3rem;flex:none;font-size:.8rem}.chip .gr:hover{opacity:.9}
  .chip.dragging{opacity:.15;pointer-events:none}
@@ -328,10 +347,18 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   h1{font-size:1rem}
   #controls{gap:.35rem .6rem}
   #msg{margin-left:0;flex-basis:100%;text-align:left}      /* count on its own line, stable width */
-  #twrap{overflow-x:auto;-webkit-overflow-scrolling:touch} /* swipe the table sideways on small screens */
-  #t{min-width:760px}
-  thead th{position:static}                                /* header sits under the map, not floating */
+  thead th{position:relative;top:auto}                     /* relative (not sticky): no float, but anchors the resize grip */
+  #twrap{overflow-x:auto;overflow-y:visible;max-height:none;-webkit-overflow-scrolling:touch} /* mobile: page scrolls vertically, table scrolls sideways */
   #detail{width:94vw}
+  /* larger, tappable filter-chip affordances on mobile */
+  .chip{font-size:.95rem;padding:.28rem .6rem}
+  .chip .gr{font-size:1.1rem;margin-right:.45rem}
+  .chip .so{width:1.1rem;height:1.1rem;margin-right:.45rem}
+  .chip .so::after{inset:.26rem}
+  .chip .sw{width:.72rem;height:.72rem;margin-left:.45rem}
+  .chip .ed{font-size:1.05rem;margin-left:.4rem}
+  .chip .x{font-size:1.15rem;margin-left:.4rem}
+  #addf{font-size:.95rem;width:100%}
  }
 </style></head><body>
 <div id="top">
@@ -353,7 +380,10 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   </span>
   <span id="msg" class="meta">loading&hellip;</span>
  </div>
- <div id="filterbar"><span id="filters"></span><input id="addf" placeholder="+ url filter, e.g. /blog* &#8629;"></div>
+ <div id="filtwrap">
+  <div id="filthdr" class="meta"><span id="filtcaret">&#9662;</span> filters &middot; <span id="filtcount">0</span></div>
+  <div id="filterbar"><span id="filters"></span><input id="addf" placeholder="+ url filter, e.g. /blog* &#8629;"></div>
+ </div>
  <div id="mapwrap">
   <div id="maphdr" class="meta"><span id="mapcaret">&#9662;</span> map &middot; <span id="mapcount">0 locations</span></div>
   <svg id="map" preserveAspectRatio="xMidYMid meet"></svg>
@@ -440,6 +470,7 @@ function reorder(from,to){
 }
 function renderChips(){
   PAGE_N=0;                          // any chip change resets to the first page
+  const fc=document.querySelector('#filtcount'); if(fc)fc.textContent=filters.length;
   const c=document.querySelector('#filters');c.innerHTML='';
   filters.forEach((f,i)=>{
     if(!f.c) f.c=pickColor();
@@ -513,6 +544,24 @@ function svgPt(svg,ev){          // client px -> viewBox coords (ignores the gro
   const p=svg.createSVGPoint(); p.x=ev.clientX; p.y=ev.clientY;
   return p.matrixTransform(svg.getScreenCTM().inverse());
 }
+// One drag helper for mouse AND touch (pointer events proved unreliable for touch on mobile).
+// onDown/onMove get viewport (clientX,clientY); touchmove is preventDefault'd so the page can't scroll.
+function onDrag(el,onDown,onMove,onEnd,skip){
+  let act=false;
+  el.addEventListener('mousedown',e=>{
+    if(e.button||(skip&&skip(e))) return;
+    e.preventDefault(); act=true; onDown(e.clientX,e.clientY);
+    const mm=ev=>{if(act)onMove(ev.clientX,ev.clientY);};
+    const mu=()=>{if(act){act=false;onEnd&&onEnd();}window.removeEventListener('mousemove',mm);window.removeEventListener('mouseup',mu);};
+    window.addEventListener('mousemove',mm); window.addEventListener('mouseup',mu);
+  });
+  // touch listeners bound to the element up front (non-passive) so the browser honors
+  // touch-action:none and keeps firing touchmove on the start element for the whole gesture
+  el.addEventListener('touchstart',e=>{if(skip&&skip(e))return;act=true;const t=e.touches[0];onDown(t.clientX,t.clientY);},{passive:true});
+  el.addEventListener('touchmove',e=>{if(!act)return;e.preventDefault();const t=e.touches[0];if(t)onMove(t.clientX,t.clientY);},{passive:false});
+  el.addEventListener('touchend',()=>{if(act){act=false;onEnd&&onEnd();}},{passive:true});
+  el.addEventListener('touchcancel',()=>{if(act){act=false;onEnd&&onEnd();}},{passive:true});
+}
 function drawMap(rows){          // pins by lat/lon on the vendored equirectangular land
   const svg=document.querySelector('#map'); if(!svg||!WORLD) return;
   const tags=filters.filter(f=>f.on&&f.p).map(f=>({rx:globToRe(f.p),c:f.c}));   // active chip colors
@@ -555,14 +604,14 @@ function selectPin(k){                            // mark one location selected 
 }
 const locKey=x=>(x.latitude!=null&&x.longitude!=null)?((+x.latitude).toFixed(1)+','+(+x.longitude).toFixed(1)):'';
 // --- table columns: data-driven, reorderable + resizable; header filters (regex, one per column) ---
-const COLDEFS=[
+const COLDEFS=[                       // filt: clickable header + clickable cells (url filters via chips)
  {k:'time',   label:'time',   w:200, get:x=>fmtLocal(x.timestamp),         cls:()=>'meta'},
- {k:'status', label:'st',     w:54,  get:x=>''+x.status_code,              cls:x=>'s'+(''+x.status_code)[0]},
- {k:'method', label:'method', w:76,  get:x=>x.method||'',                  cls:()=>''},
+ {k:'status', label:'st',     w:54,  get:x=>''+x.status_code,              cls:x=>'s'+(''+x.status_code)[0], filt:true},
+ {k:'method', label:'method', w:76,  get:x=>x.method||'',                  cls:()=>'',       filt:true},
  {k:'url',    label:'url',    w:300, get:x=>pathOf(x.url),                 cls:()=>'url', color:true},
- {k:'ip',     label:'ip',     w:150, get:x=>x.client_ip||'',               cls:()=>'meta'},
- {k:'country',label:'country',w:72,  get:x=>x.country||'',                 cls:()=>'meta'},
- {k:'region', label:'region', w:130, get:x=>x.region||'',                  cls:()=>'meta'},
+ {k:'ip',     label:'ip',     w:150, get:x=>x.client_ip||'',               cls:()=>'meta',   filt:true},
+ {k:'country',label:'country',w:72,  get:x=>x.country||'',                 cls:()=>'meta',   filt:true},
+ {k:'region', label:'region', w:130, get:x=>x.region||'',                  cls:()=>'meta',   filt:true},
  {k:'ms',     label:'ms',     w:62,  get:x=>x.duration_ns?''+Math.round(x.duration_ns/1e6):'', cls:()=>''},
  {k:'cache',  label:'cache',  w:84,  get:x=>x.edge_cache_result||'',       cls:()=>'meta'},
 ];
@@ -576,6 +625,15 @@ const saveCols=()=>{try{localStorage.setItem('nf_cols',JSON.stringify(COLS));}ca
 let HFILT={};                        // {colKey: regexString} -- per-column filter, AND across columns, transient
 function reFor(s){try{return new RegExp(s,'i');}catch(e){return {test:v=>(''+v).toLowerCase().includes(s.toLowerCase())};}}
 function applyHF(k,v){v=v.trim(); if(v==='')delete HFILT[k]; else HFILT[k]=v; editingCol=null; PAGE_N=0; buildHead(); render();}
+function toggleHF(k,v){if(HFILT[k]===v)delete HFILT[k]; else HFILT[k]=v; editingCol=null; PAGE_N=0; buildHead(); render();}  // click a cell to filter
+function autofit(c){                 // double-click the divider: size the column to its widest content
+  const d=colDef(c.k), cv=autofit._cv||(autofit._cv=document.createElement('canvas')), ctx=cv.getContext('2d');
+  const td=document.querySelector('#t tbody td'); ctx.font=getComputedStyle(td||document.body).font;
+  let max=ctx.measureText((c.k==='time'?d.label+' ('+TZ+')':d.label)+'   ').width;
+  for(const x of ROWS){const w=ctx.measureText(''+d.get(x)).width; if(w>max)max=w;}
+  c.w=Math.min(640,Math.max(40,Math.ceil(max)+24));   // +padding
+  saveCols(); buildHead(); render();
+}
 let editingCol=null, thMoved=false;
 function tableW(){return COLS.reduce((s,c)=>s+c.w,0);}
 function buildHead(){
@@ -583,56 +641,56 @@ function buildHead(){
   COLS.forEach(c=>{
     const d=colDef(c.k), th=document.createElement('th');
     th.style.width=c.w+'px'; th.dataset.k=c.k;
-    if(HFILT[c.k]!=null) th.classList.add('filt');
+    if(HFILT[c.k]!=null) th.classList.add('filt','colfilt');
     if(editingCol===c.k){            // inline regex input for this column
       const inp=document.createElement('input'); inp.className='hf'; inp.value=HFILT[c.k]||''; inp.placeholder=d.label+' regex';
       inp.onkeydown=e=>{if(e.key==='Enter')applyHF(c.k,inp.value); if(e.key==='Escape'){editingCol=null;buildHead();}};
       inp.onblur=()=>applyHF(c.k,inp.value);
       th.appendChild(inp); tr.appendChild(th); setTimeout(()=>inp.focus(),0); return;
     }
-    const hl=document.createElement('span'); hl.className='hl';
+    const wrap=document.createElement('div'); wrap.className='hcell';
+    const hl=document.createElement('span'); hl.className='hl'+(d.filt?' f':'');
     hl.textContent = (HFILT[c.k]!=null) ? (d.label+' = '+(HFILT[c.k]||'*'))
                    : (c.k==='time' ? d.label+' ('+TZ+')' : d.label);
-    hl.title='click to filter \\u00b7 drag to reorder';
-    hl.onclick=()=>{if(!thMoved){editingCol=c.k;buildHead();}};
-    th.appendChild(hl);
-    if(HFILT[c.k]!=null){const x=document.createElement('b');x.className='hx';x.textContent='\\u00d7';
-      x.onclick=e=>{e.stopPropagation();delete HFILT[c.k];PAGE_N=0;buildHead();render();};th.appendChild(x);}
+    hl.title=d.filt?'click to filter \\u00b7 drag to reorder':'drag to reorder';
+    if(d.filt) hl.onclick=()=>{if(!thMoved){editingCol=c.k;buildHead();}};
+    wrap.appendChild(hl);
+    if(HFILT[c.k]!=null){const x=document.createElement('b');x.className='hx';x.textContent='\\u00d7';x.title='clear filter';
+      x.onpointerdown=e=>e.stopPropagation();
+      x.onclick=e=>{e.stopPropagation();delete HFILT[c.k];PAGE_N=0;buildHead();render();};wrap.appendChild(x);}
+    th.appendChild(wrap);
     const rsz=document.createElement('div'); rsz.className='rsz'; startResize(rsz,c); th.appendChild(rsz);
     startReorder(th);
     tr.appendChild(th);
   });
   document.querySelector('#t').style.width=tableW()+'px';
 }
-function startResize(handle,c){      // drag the right edge to resize (pointer = mouse + touch)
-  handle.addEventListener('pointerdown',e=>{
-    e.preventDefault(); e.stopPropagation();
-    const x0=e.clientX, w0=c.w; handle.setPointerCapture(e.pointerId);
-    const mv=ev=>{c.w=Math.max(40,Math.round(w0+ev.clientX-x0)); handle.closest('th').style.width=c.w+'px';
-      document.querySelector('#t').style.width=tableW()+'px';};
-    const up=()=>{handle.removeEventListener('pointermove',mv); handle.removeEventListener('pointerup',up); saveCols();};
-    handle.addEventListener('pointermove',mv); handle.addEventListener('pointerup',up);
-  });
+function startResize(handle,c){      // drag the right edge to resize; double-tap/click to auto-fit (mouse + touch)
+  let x0=0,w0=0,th,didMove=false,lastTap=0;
+  onDrag(handle,
+    (x)=>{x0=x;w0=c.w;th=handle.closest('th');didMove=false;handle.classList.add('act');},
+    (x)=>{didMove=true;c.w=Math.max(40,Math.round(w0+x-x0)); th.style.width=c.w+'px'; document.querySelector('#t').style.width=tableW()+'px';},
+    ()=>{handle.classList.remove('act');
+      if(didMove){saveCols();}
+      else{const now=Date.now(); if(now-lastTap<350){autofit(c);lastTap=0;} else lastTap=now;}});   // two taps with no drag = auto-fit
 }
-function startReorder(th){           // drag a header onto another to reorder columns
-  th.addEventListener('pointerdown',e=>{
-    if(e.button||e.target.closest('.rsz')||e.target.closest('input')) return;
-    const x0=e.clientX, dragK=th.dataset.k; thMoved=false;
-    const mv=ev=>{if(!thMoved && Math.abs(ev.clientX-x0)>5){thMoved=true;th.classList.add('dragging');}};
-    const up=ev=>{
-      window.removeEventListener('pointermove',mv); window.removeEventListener('pointerup',up);
+function startReorder(th){           // drag a header onto another to reorder columns (mouse + touch)
+  let x0=0,dragK='';
+  onDrag(th,
+    (x)=>{x0=x;dragK=th.dataset.k;thMoved=false;},
+    (x,y)=>{if(!thMoved && Math.abs(x-x0)>5){thMoved=true;th.classList.add('dragging');} th.__dropX=x; th.__dropY=y;},
+    ()=>{
       th.classList.remove('dragging');
       if(thMoved){
-        const tt=(document.elementFromPoint(ev.clientX,ev.clientY)||{}).closest?.('th');
+        const tt=(document.elementFromPoint(th.__dropX,th.__dropY)||{}).closest?.('th');
         if(tt&&tt.dataset.k&&tt.dataset.k!==dragK){
           const from=COLS.findIndex(c=>c.k===dragK), to=COLS.findIndex(c=>c.k===tt.dataset.k);
           const [m]=COLS.splice(from,1); COLS.splice(to,0,m); saveCols(); buildHead(); render();
         }
         setTimeout(()=>{thMoved=false;},0);   // swallow the trailing click
       }
-    };
-    window.addEventListener('pointermove',mv); window.addEventListener('pointerup',up);
-  });
+    },
+    e=>e.target.closest('.rsz,.hx,input'));   // skip when starting on the resize handle / clear-x / input
 }
 function render(){
   const active=filters.filter(f=>f.on && f.p);                 // on url-chips show only their matches (OR)
@@ -650,14 +708,14 @@ function render(){
   for(const x of pageRows){                       // render only the current page, columns in user order
     const key=locKey(x), cc=colorFor(pathOf(x.url));
     let h='';
-    for(const c of COLS){ const d=colDef(c.k), v=d.get(x), cls=d.cls(x),
-          style=(d.color&&cc)?' style="color:'+cc+'"':'';
-      h+='<td class="'+cls+'"'+style+' title="'+esc(v)+'">'+esc(v)+'</td>'; }
+    for(const c of COLS){ const d=colDef(c.k), v=d.get(x), cls=(d.cls(x)+(d.filt?' fc':'')+(HFILT[c.k]!=null?' colfilt':'')).trim(),
+          style=(d.color&&cc)?' style="color:'+cc+'"':'', fk=d.filt?(' data-fk="'+c.k+'"'):'';
+      h+='<td class="'+cls+'"'+style+fk+' title="'+esc(v)+'">'+esc(v)+'</td>'; }
     const tr=document.createElement('tr'); tr.innerHTML=h;
     if(key) tr.dataset.key=key;
     tr.onmouseenter=()=>pingPin(key,true);
     tr.onmouseleave=()=>pingPin(key,false);
-    tr.onclick=()=>{showDetail(x);selectPin(key);};
+    tr.onclick=e=>{const fc=e.target.closest('td.fc'); if(fc){toggleHF(fc.dataset.fk,fc.textContent);} else {showDetail(x);selectPin(key);}};
     tb.appendChild(tr);
   }
   renderPager(vis.length,pages,start);
@@ -769,14 +827,31 @@ mapSvg.addEventListener('wheel',e=>{
   VIEW.tx=m.x-cp.x*s; VIEW.ty=m.y-cp.y*s; VIEW.s=s; clampView(); // keep that point fixed
   applyView();
 },{passive:false});
-mapSvg.addEventListener('pointerdown',e=>{e.preventDefault();drag=svgPt(mapSvg,e);moved=false;mapSvg.setPointerCapture(e.pointerId);mapSvg.style.cursor='grabbing';});
-mapSvg.addEventListener('pointermove',e=>{
-  if(!drag) return;
-  const m=svgPt(mapSvg,e);
-  if(Math.abs(m.x-drag.x)+Math.abs(m.y-drag.y)>0.3) moved=true;
-  VIEW.tx+=m.x-drag.x; VIEW.ty+=m.y-drag.y; clampView(); drag=m; applyView();
-});
-mapSvg.addEventListener('pointerup',()=>{drag=null;mapSvg.style.cursor='';});
+const svgXY=(x,y)=>{const p=mapSvg.createSVGPoint();p.x=x;p.y=y;return p.matrixTransform(mapSvg.getScreenCTM().inverse());};
+// mouse pan (desktop)
+mapSvg.addEventListener('mousedown',e=>{if(e.button)return;e.preventDefault();drag=svgXY(e.clientX,e.clientY);moved=false;mapSvg.style.cursor='grabbing';
+  const mm=ev=>{const m=svgXY(ev.clientX,ev.clientY);if(Math.abs(m.x-drag.x)+Math.abs(m.y-drag.y)>0.3)moved=true;VIEW.tx+=m.x-drag.x;VIEW.ty+=m.y-drag.y;clampView();drag=m;applyView();};
+  const mu=()=>{drag=null;mapSvg.style.cursor='';window.removeEventListener('mousemove',mm);window.removeEventListener('mouseup',mu);};
+  window.addEventListener('mousemove',mm);window.addEventListener('mouseup',mu);});
+// touch: 1 finger = pan, 2 fingers = pinch-zoom
+let tPan=null, tPinch=null;
+mapSvg.addEventListener('touchstart',e=>{
+  if(e.touches.length===1){const t=e.touches[0];tPan=svgXY(t.clientX,t.clientY);moved=false;tPinch=null;}
+  else if(e.touches.length>=2){tPan=null;const a=e.touches[0],b=e.touches[1];
+    tPinch={d:Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY),s:VIEW.s,tx:VIEW.tx,ty:VIEW.ty,
+            cp:{x:(svgXY((a.clientX+b.clientX)/2,(a.clientY+b.clientY)/2).x-VIEW.tx)/VIEW.s,
+                y:(svgXY((a.clientX+b.clientX)/2,(a.clientY+b.clientY)/2).y-VIEW.ty)/VIEW.s}};}
+},{passive:true});
+mapSvg.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  if(e.touches.length===1 && tPan){const t=e.touches[0],m=svgXY(t.clientX,t.clientY);
+    VIEW.tx+=m.x-tPan.x;VIEW.ty+=m.y-tPan.y;clampView();tPan=m;applyView();}
+  else if(e.touches.length>=2 && tPinch){const a=e.touches[0],b=e.touches[1];
+    const d=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY), s=Math.min(Math.max(tPinch.s*d/tPinch.d,1),40);
+    const m=svgXY((a.clientX+b.clientX)/2,(a.clientY+b.clientY)/2);
+    VIEW.s=s;VIEW.tx=m.x-tPinch.cp.x*s;VIEW.ty=m.y-tPinch.cp.y*s;clampView();applyView();}
+},{passive:false});
+mapSvg.addEventListener('touchend',e=>{if(e.touches.length===0){tPan=null;tPinch=null;}});
 // global swipe-toggle across chips (works for touch: hit-test under the pointer)
 window.addEventListener('pointermove',e=>{
   if(!SWIPE) return;
@@ -791,10 +866,11 @@ mapSvg.addEventListener('click',e=>{
 });
 mapSvg.addEventListener('dblclick',resetView);                // double-click resets zoom/pan
 const applyMapH=()=>{mapSvg.style.height=Math.min(mapH,Math.round(innerHeight*0.45))+'px';};  // cap at ~45vh so the map never eats a small screen
-(function(){const grip=document.querySelector('#mapgrip');let gy=0,gh=0,on=false;
-  grip.addEventListener('pointerdown',e=>{e.preventDefault();on=true;gy=e.clientY;gh=mapH;grip.setPointerCapture(e.pointerId);});
-  grip.addEventListener('pointermove',e=>{if(!on)return;mapH=Math.max(120,Math.min(800,gh+e.clientY-gy));applyMapH();});
-  grip.addEventListener('pointerup',()=>{if(on){on=false;try{localStorage.setItem('nf_map_h',mapH);}catch(e){/* no storage */}}});
+(function(){const grip=document.querySelector('#mapgrip');let gy=0,gh=0;
+  onDrag(grip,
+    (x,y)=>{gy=y;gh=mapH;},
+    (x,y)=>{mapH=Math.max(120,Math.min(800,gh+y-gy));applyMapH();},
+    ()=>{try{localStorage.setItem('nf_map_h',mapH);}catch(e){/* no storage */}});
 })();
 let mapHidden=false; try{mapHidden=localStorage.getItem('nf_map_hidden')==='1';}catch(e){/* no storage */}
 function applyMap(){
@@ -806,6 +882,10 @@ function applyMap(){
 }
 document.querySelector('#maphdr').onclick=()=>{mapHidden=!mapHidden;try{localStorage.setItem('nf_map_hidden',mapHidden?'1':'0');}catch(e){/* no storage */}applyMap();};
 applyMap();
+let filtHidden=false; try{filtHidden=localStorage.getItem('nf_filt_hidden')==='1';}catch(e){/* no storage */}
+function applyFilt(){document.querySelector('#filterbar').style.display=filtHidden?'none':'';document.querySelector('#filtcaret').textContent=filtHidden?'\\u25b8':'\\u25be';}
+document.querySelector('#filthdr').onclick=()=>{filtHidden=!filtHidden;try{localStorage.setItem('nf_filt_hidden',filtHidden?'1':'0');}catch(e){}applyFilt();};
+applyFilt();
 document.querySelector('#scrim').onclick=hideDetail;          // click outside the detail closes it
 // keep the table's sticky column header docked just under the sticky top bar
 const topEl=document.querySelector('#top');
