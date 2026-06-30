@@ -1,8 +1,20 @@
 # netlify-logs
 
-A small script to pull your own Netlify access logs and keep them locally in SQLite, with a tiny dashboard to look at them. Run `./netlify-logs.py -h`, `pull -h`, or `serve -h` for the full set of options.
+A small script to pull your own Netlify traffic logs into a local SQLite, with a tiny dashboard to look at them. Single file, Python stdlib only, no dependencies. Run `./netlify-logs.py -h`, `pull -h`, or `serve -h` for the full set of options.
 
 ![dashboard](docs/01-dashboard.png)
+
+## Heads up
+
+This reads your site's traffic logs through the same internal endpoint Netlify's
+own dashboard uses. There's no public API for it, so:
+
+- It's **unofficial and not affiliated with Netlify**, and it can break whenever
+  they change that endpoint
+- It's for **your own logs on your own account**, nothing else
+- Using it may violate Netlify's terms of service
+- Use at your own risk
+- Keep paying for Netlify
 
 ## Setup
 
@@ -17,10 +29,7 @@ export NETLIFY_SITE_ID=<your-site-id>   # Site configuration -> Site information
 dashboard on `127.0.0.1:8800`. Requests are stored in `logs/access.db`, a
 stdlib SQLite database, deduped by `request_id`.
 
-## Dashboard
+## License
 
-- **Date range.** Last 1h / 24h / 7d / 30d, custom, or all.
-- **World map** of request origins. Zoom, pan, fit.
-- **Entry-detail drawer.** Click any row or pin for the full record.
-- **Filter chips.** Toggle URL-glob filters on or off; recolor or rename each in place.
-- **Run now.** Pull on demand and refresh.
+MIT. The world outline in `world.json` is generated from
+[Natural Earth](https://www.naturalearthdata.com/) 110m land data (public domain).
