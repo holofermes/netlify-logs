@@ -293,13 +293,22 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  #toast.show{opacity:1;transform:none}
  td.url{color:#94e2d5}.s2{color:#a6e3a1}.s3{color:#f9e2af}.s4{color:#fab387}.s5{color:#f38ba8}
  .meta{color:#6c7086}
- #filtwrap{margin:0 0 .5rem;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
- #filthdr{padding:.4rem .7rem;font-size:.8rem;cursor:pointer;user-select:none;border-bottom:1px solid #1e2430}
+ #filtwrap{position:relative;margin:0 0 .5rem;border:1px solid #1e2430;border-radius:8px;background:#0a1020;overflow:hidden}
+ .fhre{display:none}body.reordering .fhnorm{display:none}body.reordering .fhre{display:inline}
+ #reOk,#reCancel{display:inline-flex;align-items:center;cursor:pointer;color:#cdd6f4}#reOk{color:#a6e3a1}
+ .rearrow{display:none;position:absolute;bottom:.45rem;z-index:6;background:#313a4f;color:#cdd6f4;border:0;border-radius:6px;font-size:1rem;line-height:1;width:2rem;height:2rem;align-items:center;justify-content:center;opacity:.92}
+ #reL{left:.4rem}#reR{right:.4rem}
+ body.reordering .rearrow{display:flex}
+ .chip{transition:opacity .15s}
+ .chip.reactive{box-shadow:0 0 0 2px #89b4fa}
+ body.reordering .chip:not(.reactive){opacity:.3}   /* dim the other pills so the selected one stands out */
+ #filthdr{display:flex;align-items:center;gap:.35rem;padding:.4rem .7rem;font-size:.8rem;cursor:pointer;user-select:none;border-bottom:1px solid #1e2430}
  #filthdr:hover{background:#11151f}
  #filtcaret{display:inline-block;width:1rem;text-align:center}
  #filterbar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;padding:.5rem .6rem;margin:0}
  #filters{display:contents}
- .chip .gr{cursor:grab;opacity:.4;margin-right:.3rem;flex:none;font-size:.8rem}.chip .gr:hover{opacity:.9}
+ .chip .gr{display:inline-flex;align-items:center;cursor:grab;opacity:.45;margin-right:.35rem;flex:none}.chip .gr:hover{opacity:.95}
+ .chip .gr svg{width:.95rem;height:.95rem;display:block}
  .chip.dragging{opacity:.15;pointer-events:none}
  .chip .so{width:.85rem;height:.85rem;box-sizing:border-box;border:2px solid currentColor;border-radius:50%;margin-right:.4rem;flex:none;opacity:.55;cursor:pointer;position:relative}
  .chip .so::after{content:"";position:absolute;inset:.18rem;border-radius:50%;background:currentColor}
@@ -310,8 +319,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .chip .sw{width:.48rem;height:.48rem;border-radius:50%;margin-left:.4rem;flex:none;cursor:pointer;opacity:.55}.chip .sw:hover{opacity:1}
  .chip .sw:hover{box-shadow:0 0 0 2px #ffffff66}
  .chip .lbl.editing{outline:none;border-bottom:1px dashed currentColor;cursor:text;min-width:1ch}
- .chip .ed{margin-left:.35rem;opacity:.45;cursor:pointer;font-size:.78rem}.chip .ed:hover{opacity:1}
- .chip .x{margin-left:.3rem;opacity:.5;cursor:pointer}.chip .x:hover{opacity:1}
+ .chip .ed{display:inline-flex;align-items:center;line-height:1;margin-left:.35rem;opacity:.45;cursor:pointer;font-size:.78rem}.chip .ed:hover{opacity:1}
+ .chip .x{display:inline-flex;align-items:center;line-height:1;margin-left:.3rem;opacity:.5;cursor:pointer}.chip .x:hover{opacity:1}
  #addf{font:inherit;background:#11151f;border:1px solid #45475a;border-radius:999px;color:#cdd6f4;padding:.15rem .6rem;width:13rem}
  tbody tr{cursor:pointer}tbody tr:hover{background:#11151f}
  #detail{position:fixed;top:0;right:0;height:100%;width:min(480px,92vw);background:#11151f;border-left:1px solid #1e2430;padding:1rem 1.2rem;overflow:auto;transform:translateX(105%);transition:transform .15s;box-shadow:-8px 0 24px #0008;z-index:6}
@@ -350,15 +359,16 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   thead th{position:relative;top:auto}                     /* relative (not sticky): no float, but anchors the resize grip */
   #twrap{overflow-x:auto;overflow-y:visible;max-height:none;-webkit-overflow-scrolling:touch} /* mobile: page scrolls vertically, table scrolls sideways */
   #detail{width:94vw}
-  /* larger, tappable filter-chip affordances on mobile */
-  .chip{font-size:.95rem;padding:.28rem .6rem}
-  .chip .gr{font-size:1.1rem;margin-right:.45rem}
+  /* mobile: chips in one scrollable row (drag = scroll); larger, tappable affordances */
+  #filterbar{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .chip{font-size:.95rem;padding:.28rem .6rem;flex:0 0 auto;touch-action:pan-x}
+  .chip .gr{margin-right:.45rem}.chip .gr svg{width:1.15rem;height:1.15rem}
   .chip .so{width:1.1rem;height:1.1rem;margin-right:.45rem}
   .chip .so::after{inset:.26rem}
   .chip .sw{width:.72rem;height:.72rem;margin-left:.45rem}
   .chip .ed{font-size:1.05rem;margin-left:.4rem}
   .chip .x{font-size:1.15rem;margin-left:.4rem}
-  #addf{font-size:.95rem;width:100%}
+  #addf{font-size:.95rem;width:12rem;flex:0 0 auto}
  }
 </style></head><body>
 <div id="top">
@@ -381,8 +391,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   <span id="msg" class="meta">loading&hellip;</span>
  </div>
  <div id="filtwrap">
-  <div id="filthdr" class="meta"><span id="filtcaret">&#9662;</span> filters &middot; <span id="filtcount">0</span></div>
+  <div id="filthdr" class="meta"><span class="fhnorm"><span id="filtcaret">&#9662;</span> filters &middot; <span id="filtcount">0</span></span><span class="fhre">reordering &middot; <b id="reOk">&#10003; done</b> &middot; <b id="reCancel">&#10005; cancel</b></span></div>
   <div id="filterbar"><span id="filters"></span><input id="addf" placeholder="+ url filter, e.g. /blog* &#8629;"></div>
+  <button id="reL" class="rearrow">&#9664;</button><button id="reR" class="rearrow">&#9654;</button>
  </div>
  <div id="mapwrap">
   <div id="maphdr" class="meta"><span id="mapcaret">&#9662;</span> map &middot; <span id="mapcount">0 locations</span></div>
@@ -468,6 +479,21 @@ function reorder(from,to){
   const [m]=filters.splice(from,1); filters.splice(to,0,m);
   SOLOED=-1; saveF(); renderChips(); render();
 }
+function enterReorder(i){             // mobile: tap a chip's handle to start reordering it
+  if(reorderIdx<0) reorderSnap=filters.map(f=>({...f}));   // snapshot to revert on cancel
+  reorderIdx=i; document.body.classList.add('reordering'); renderChips();
+}
+function moveReorder(dir){            // nudge the selected chip one slot left/right (live, not saved yet)
+  if(reorderIdx<0)return; const j=reorderIdx+dir; if(j<0||j>=filters.length)return;
+  const [m]=filters.splice(reorderIdx,1); filters.splice(j,0,m); reorderIdx=j;
+  PAGE_N=0; renderChips(); render();
+  const el=document.querySelectorAll('#filters .chip')[reorderIdx]; if(el)el.scrollIntoView({inline:'center',block:'nearest'});
+}
+function endReorder(commit){
+  if(commit){SOLOED=-1; saveF();}
+  else if(reorderSnap){filters.length=0; reorderSnap.forEach(f=>filters.push(f));}
+  reorderIdx=-1; reorderSnap=null; document.body.classList.remove('reordering'); renderChips(); render();
+}
 function renderChips(){
   PAGE_N=0;                          // any chip change resets to the first page
   const fc=document.querySelector('#filtcount'); if(fc)fc.textContent=filters.length;
@@ -475,13 +501,15 @@ function renderChips(){
   filters.forEach((f,i)=>{
     if(!f.c) f.c=pickColor();
     const el=document.createElement('span');
-    el.className='chip'+(f.on?' on':'');
+    el.className='chip'+(f.on?' on':'')+(i===reorderIdx?' reactive':'');
     el.style.borderColor=f.c; el.style.color=f.c;                  // the chip's own color
     el.style.background = f.on ? f.c+'3a' : 'transparent';         // filled when on; dashed border when off
     el.title='click / swipe across to toggle';
     const ctl=(cls,ch,tip)=>{const b=document.createElement('b');b.className=cls;b.textContent=ch;b.title=tip;b.onmousedown=e=>e.stopPropagation();return b;};
-    const gr=ctl('gr','\\u2630','drag to reorder');
-    gr.onmousedown=e=>{e.stopPropagation();el.draggable=true;};     // only the handle starts a drag
+    const gr=document.createElement('b'); gr.className='gr'; gr.title='drag (desktop) / tap (mobile) to reorder';
+    gr.innerHTML='<svg viewBox="0 0 16 16"><path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none"/></svg>';
+    gr.onmousedown=e=>{e.stopPropagation();el.draggable=true;};     // desktop: starts an HTML5 drag
+    gr.onclick=e=>{e.stopPropagation(); if(matchMedia('(max-width:640px)').matches) enterReorder(i);};  // mobile: tap-to-reorder
     const sw=document.createElement('b');sw.className='sw';sw.style.background=f.c;sw.title='change color';
     sw.onmousedown=e=>e.stopPropagation(); sw.onclick=e=>{e.stopPropagation();editColor(i);};
     const lbl=document.createElement('span');lbl.className='lbl';lbl.textContent=f.p;
@@ -489,10 +517,18 @@ function renderChips(){
     const so=ctl('so','','solo (only this)'); so.onclick=e=>{e.stopPropagation();soloChip(i);};   // CSS-drawn ring
     const ed=ctl('ed','\\u270e','rename');           ed.onclick=e=>{e.stopPropagation();editText(i,lbl);};
     const x =ctl('x','\\u00d7','remove');            x.onclick=e=>{e.stopPropagation();filters.splice(i,1);SOLOED=-1;saveF();renderChips();render();};
-    el.onpointerdown=e=>{if(e.button||e.target.closest('.gr,.sw,.so,.ed,.x'))return; SWIPE=true;LASTSWIPE=i;paintChip(i,el);};  // tap/swipe start (mouse + touch)
+    el.onpointerdown=e=>{
+      if(e.button||e.target.closest('.gr,.sw,.so,.ed,.x'))return;
+      if(e.pointerType==='touch'){el._dx=e.clientX;el._dy=e.clientY;}    // touch: drag scrolls the row; toggle only on a tap (pointerup)
+      else if(reorderIdx<0){SWIPE=true;LASTSWIPE=i;paintChip(i,el);}     // mouse: toggle now + swipe-paint across chips
+    };
     el.onmouseenter=()=>{if(!SWIPE)pingChip(i,true);};                   // desktop hover pings its pins
     el.onmouseleave=()=>{if(!SWIPE)pingChip(i,false);};
-    el.onpointerup=()=>{el.draggable=false;};                            // never leave it draggable
+    el.onpointerup=e=>{el.draggable=false;
+      if(e.pointerType==='touch'&&el._dx!=null){
+        if(Math.abs(e.clientX-el._dx)+Math.abs(e.clientY-el._dy)<12){ if(reorderIdx>=0)enterReorder(i); else paintChip(i,el); }   // in reorder mode a tap re-selects
+        el._dx=null;}};
+    el.onpointercancel=()=>{el._dx=null;};                               // a scroll-drag is not a tap
     el.draggable=false;
     el.ondragstart=e=>{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text','');DRAGI=i;el.classList.add('dragging');};
     el.ondragend=()=>{el.draggable=false;el.classList.remove('dragging');DRAGI=-1;};
@@ -526,6 +562,7 @@ function editText(i,lbl){          // rename the pattern in place (underlined wh
 const matchAny=(list,path)=>list.some(f=>globToRe(f.p).test(path));
 const PAGE_SIZE=100; let PAGE_N=0;              // table pagination (map/filters still see all)
 let SWIPE=false, LASTSWIPE=-1, DRAGI=-1;        // chip swipe-toggle + drag-reorder state
+let reorderIdx=-1, reorderSnap=null;            // mobile tap-to-reorder: selected chip + revert snapshot
 let SOLOED=-1, PRESOLO=null;                    // solo memory: which chip is soloed + states to restore
 let mapH=340; try{const v=+localStorage.getItem('nf_map_h'); if(v)mapH=v;}catch(e){/* no storage */}
 let WORLD=null, AGG=[], VIEW={s:1,tx:0,ty:0};   // VIEW persists across redraws
@@ -884,7 +921,11 @@ document.querySelector('#maphdr').onclick=()=>{mapHidden=!mapHidden;try{localSto
 applyMap();
 let filtHidden=false; try{filtHidden=localStorage.getItem('nf_filt_hidden')==='1';}catch(e){/* no storage */}
 function applyFilt(){document.querySelector('#filterbar').style.display=filtHidden?'none':'';document.querySelector('#filtcaret').textContent=filtHidden?'\\u25b8':'\\u25be';}
-document.querySelector('#filthdr').onclick=()=>{filtHidden=!filtHidden;try{localStorage.setItem('nf_filt_hidden',filtHidden?'1':'0');}catch(e){}applyFilt();};
+document.querySelector('#filthdr').onclick=()=>{if(reorderIdx>=0)return;filtHidden=!filtHidden;try{localStorage.setItem('nf_filt_hidden',filtHidden?'1':'0');}catch(e){/* no storage */}applyFilt();};
+document.querySelector('#reL').onclick=()=>moveReorder(-1);
+document.querySelector('#reR').onclick=()=>moveReorder(1);
+document.querySelector('#reOk').onclick=e=>{e.stopPropagation();endReorder(true);};
+document.querySelector('#reCancel').onclick=e=>{e.stopPropagation();endReorder(false);};
 applyFilt();
 document.querySelector('#scrim').onclick=hideDetail;          // click outside the detail closes it
 // keep the table's sticky column header docked just under the sticky top bar
