@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install as user systemd units: a 15-minute pull timer and a localhost-bound
 # dashboard. No root required. Reaching the dashboard from another machine is
-# up to you (tailscale serve, SSH tunnel, reverse proxy) -- not this tool's job.
+# up to you (SSH tunnel, reverse proxy) -- not this tool's job.
 #
 # Prerequisites:
 #   - the Netlify CLI, authenticated:
@@ -13,6 +13,9 @@
 # Usage:
 #   NETLIFY_SITE_ID=<id> ./install.sh   install, enable, start
 #   ./install.sh stop                   stop and disable
+#
+# Behind a reverse proxy that forwards the original Host header, set
+# NETLIFY_LOGS_ALLOW_HOST to the name(s) clients use; space-separate several.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -21,6 +24,10 @@ UNITDIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 PORT="${NETLIFY_LOGS_PORT:-8800}"
 WINDOW="${NETLIFY_LOGS_WINDOW:-20}"
 HOST="${NETLIFY_LOGS_HOST:-127.0.0.1}"
+ALLOW_ARGS=""
+for h in ${NETLIFY_LOGS_ALLOW_HOST:-}; do
+  ALLOW_ARGS="$ALLOW_ARGS --allow-host $h"
+done
 
 if [ "${1:-install}" = "stop" ]; then
   systemctl --user disable --now netlify-logs.service netlify-logs-pull.timer 2>/dev/null || true
@@ -71,7 +78,7 @@ After=network-online.target
 
 [Service]
 Environment=NETLIFY_SITE_ID=$NETLIFY_SITE_ID
-ExecStart=$SCRIPT serve --host $HOST --port $PORT --minutes $WINDOW
+ExecStart=$SCRIPT serve --host $HOST --port $PORT --minutes $WINDOW$ALLOW_ARGS
 Restart=on-failure
 RestartSec=10
 
@@ -92,5 +99,6 @@ echo "  dashboard: http://$HOST:$PORT  (local only)"
 echo "  logs:      journalctl --user -u netlify-logs.service -f"
 echo
 echo "to reach the dashboard from another machine, front it yourself, e.g.:"
-echo "  tailscale serve --bg --set-path /logs http://$HOST:$PORT   # <host>/logs"
+echo "  a reverse proxy to http://$HOST:$PORT"
+echo "    (if it forwards the original Host, reinstall with NETLIFY_LOGS_ALLOW_HOST=<name>)"
 echo "  ssh -L $PORT:$HOST:$PORT <this-host>"

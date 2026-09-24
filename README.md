@@ -26,8 +26,10 @@ export NETLIFY_SITE_ID=<your-site-id>   # Site configuration -> Site information
 ```
 
 `install.sh` adds two user systemd units: a pull every 15 minutes, and the
-dashboard on `127.0.0.1:8800`. Requests are stored in `logs/access.db`, a
-stdlib SQLite database, deduped by `request_id`.
+dashboard on `127.0.0.1:8800`. Behind a reverse proxy that forwards the
+original Host header, install with `NETLIFY_LOGS_ALLOW_HOST=<name>`. Requests
+are stored in `logs/access.db`, a stdlib SQLite database, deduped by
+`request_id`.
 
 ## License
 

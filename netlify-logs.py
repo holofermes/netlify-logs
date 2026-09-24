@@ -10,8 +10,8 @@ Auth: install the Netlify CLI and run `netlify login`; the token is read from
 ~/.config/netlify/config.json. $NETLIFY_AUTH_TOKEN overrides it if set.
 
 The dashboard binds to localhost only. To reach it from elsewhere, front it
-with whatever you already use (e.g. `tailscale serve`, an SSH tunnel, a reverse
-proxy) -- that stays out of this tool.
+with whatever you already use (e.g. an SSH tunnel or a reverse proxy) -- that
+stays out of this tool.
 
 Usage:
   NETLIFY_SITE_ID=<your-site-id> ./netlify-logs.py pull --minutes 20
@@ -1071,7 +1071,7 @@ def main():
     s.add_argument("--run-secret", default=os.environ.get("RUN_SECRET"))
     s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
                    help="extra Host header to accept (repeatable), for proxies "
-                        "that keep their own hostname, e.g. tailscale serve")
+                        "that forward the original hostname")
     s.add_argument("--no-ip", action="store_true", help="skip per-request IP/geo enrichment")
     s.set_defaults(func=cmd_serve)
 
