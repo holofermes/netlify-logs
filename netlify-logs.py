@@ -27,9 +27,7 @@ import re
 import sys
 import time
 import sqlite3
-import concurrent.futures
-import urllib.request
-import urllib.error
+import http.client
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -66,28 +64,57 @@ def resolve_site(site=None):
     return site.strip()
 
 
-def fetch_window(token, site_id, from_ms, to_ms, per_page=100, max_pages=200):
+class Api:
+    """One keep-alive connection to the Netlify API, reused for every call in a
+    pull, so the host is resolved and the TLS handshake done once per pull."""
+
+    def __init__(self, token):
+        u = urllib.parse.urlsplit(API_HOST)
+        cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+        self.conn = cls(u.netloc, timeout=30)
+        self.base = u.path.rstrip("/")
+        self.headers = {"Authorization": f"Bearer {token}",
+                        "User-Agent": "netlify-logs/1.0",  # Python's default UA is rejected
+                        "Accept": "application/json"}
+
+    def request(self, method, path, body=None):
+        """Returns (status, body bytes). Reconnects once if the server dropped the connection."""
+        headers = dict(self.headers)
+        if body is not None:
+            body = json.dumps(body).encode()
+            headers["Content-Type"] = "application/json"
+        for retry in (True, False):
+            try:
+                self.conn.request(method, self.base + path, body=body, headers=headers)
+                r = self.conn.getresponse()
+                return r.status, r.read()
+            except (ConnectionResetError, BrokenPipeError):
+                self.conn.close()
+                if not retry:
+                    raise
+            except (OSError, http.client.HTTPException):
+                self.conn.close()
+                raise
+
+    def close(self):
+        self.conn.close()
+
+
+def fetch_window(api, site_id, from_ms, to_ms, per_page=100, max_pages=200):
     """Paginate the request log for [from_ms, to_ms]. Returns a list of rows."""
-    url = (f"{API_HOST}/api/v1/sites/{site_id}/observability/query/lists"
-           f"?from_ts={from_ms}&to_ts={to_ms}")
+    path = (f"/api/v1/sites/{site_id}/observability/query/lists"
+            f"?from_ts={from_ms}&to_ts={to_ms}")
     all_rows, page = [], 1
     while page <= max_pages:
         body = {"data": [{"attributes": {"queries": [
             {"name": "edge_requests_logs", "filters": PROD_FILTER,
              "page": page, "per_page": per_page}]}}]}
-        req = urllib.request.Request(
-            url, data=json.dumps(body).encode(), method="POST",
-            headers={"Authorization": f"Bearer {token}",
-                     "Content-Type": "application/json",
-                     "User-Agent": "netlify-logs/1.0",  # the default urllib UA is rejected
-                     "Accept": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                j = json.load(r)
-        except urllib.error.HTTPError as e:
-            if e.code in (401, 403):
-                raise SystemExit(f"auth failed (HTTP {e.code}); re-run `netlify login`.")
-            raise SystemExit(f"HTTP {e.code}: {e.read()[:200]!r}")
+        status, data = api.request("POST", path, body)
+        if status in (401, 403):
+            raise SystemExit(f"auth failed (HTTP {status}); re-run `netlify login`.")
+        if not 200 <= status < 300:
+            raise SystemExit(f"HTTP {status}: {data[:200]!r}")
+        j = json.loads(data)
         rows = (j.get("data") or [{}])[0].get("attributes", {}).get("list", []) or []
         all_rows.extend(rows)
         meta = (j.get("meta", {}).get("responses") or [{}])[0]
@@ -97,33 +124,27 @@ def fetch_window(token, site_id, from_ms, to_ms, per_page=100, max_pages=200):
     return all_rows
 
 
-def fetch_detail(token, site_id, request_id, from_ms, to_ms):
+def fetch_detail(api, site_id, request_id, from_ms, to_ms):
     """Per-request detail: client IP, geo, user agent, size. Returns dict or None.
 
     The list endpoint omits these fields; do_pull calls this once per new request
     to enrich each row before it is written.
     """
-    url = (f"{API_HOST}/api/v1/sites/{site_id}/observability/requests/{request_id}"
-           f"?from_ts={from_ms}&to_ts={to_ms}&branch={PROD_BRANCH}")
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {token}",
-        "User-Agent": "netlify-logs/1.0", "Accept": "application/json"})
+    path = (f"/api/v1/sites/{site_id}/observability/requests/{request_id}"
+            f"?from_ts={from_ms}&to_ts={to_ms}&branch={PROD_BRANCH}")
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.load(r)
-    except (OSError, ValueError):     # network error or bad JSON: skip enrichment
+        status, data = api.request("GET", path)
+        return json.loads(data) if 200 <= status < 300 else None
+    except (OSError, http.client.HTTPException, ValueError):  # network error or bad JSON: skip enrichment
         return None
 
 
-def enrich_rows(token, site_id, rows, from_ms, to_ms, workers=8):
+def enrich_rows(api, site_id, rows, from_ms, to_ms):
     """Add client IP / geo / user agent to each row in place (one detail call per row)."""
-    if not rows:
-        return
-
-    def one(row):
-        d = fetch_detail(token, site_id, row.get("request_id", ""), from_ms, to_ms)
+    for row in rows:
+        d = fetch_detail(api, site_id, row.get("request_id", ""), from_ms, to_ms)
         if not d:
-            return
+            continue
         c = d.get("client") or {}
         row["client_ip"]       = c.get("address")
         row["country"]         = c.get("country")
@@ -134,9 +155,6 @@ def enrich_rows(token, site_id, rows, from_ms, to_ms, workers=8):
         row["referrer"]        = c.get("referrer")
         row["content_type"]    = d.get("content_type")
         row["response_size_b"] = d.get("response_size_b")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(rows))) as ex:
-        list(ex.map(one, rows))
 
 
 def parse_ts_ms(ts):
@@ -198,14 +216,16 @@ def do_pull(token, site_id, minutes, db_path, enrich=True):
     """Fetch one window; insert new rows (deduped by request_id) into SQLite."""
     to_ms = int(time.time() * 1000)
     from_ms = to_ms - minutes * 60 * 1000
-    rows = fetch_window(token, site_id, from_ms, to_ms)
+    api = Api(token)
+    rows = fetch_window(api, site_id, from_ms, to_ms)
     rows.sort(key=lambda r: r.get("timestamp", ""))
 
     conn = db_connect(db_path)
     if enrich:                                    # enrich only rows we don't already have
         have = db_existing(conn, [r["request_id"] for r in rows if r.get("request_id")])
-        enrich_rows(token, site_id,
+        enrich_rows(api, site_id,
                     [r for r in rows if r.get("request_id") not in have], from_ms, to_ms)
+    api.close()
     new = db_insert(conn, rows)
     conn.close()
 
