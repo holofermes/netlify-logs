@@ -29,7 +29,8 @@ export NETLIFY_SITE_ID=<your-site-id>   # Site configuration -> Site information
 dashboard on `127.0.0.1:8800`. Behind a reverse proxy that forwards the
 original Host header, install with `NETLIFY_LOGS_ALLOW_HOST=<name>`. Requests
 are stored in `logs/access.db`, a stdlib SQLite database, deduped by
-`request_id`.
+`request_id`. Each pull reaches back to the newest stored request, so missed
+pulls are filled in as far as Netlify's log retention allows.
 
 ## License
 

@@ -213,14 +213,17 @@ def db_existing(conn, ids):
 
 
 def do_pull(token, site_id, minutes, db_path, enrich=True):
-    """Fetch one window; insert new rows (deduped by request_id) into SQLite."""
+    """Fetch the last `minutes`, or back to the newest stored request if that is
+    older (the API trims the window to the plan's log retention); insert new rows
+    (deduped by request_id) into SQLite."""
     to_ms = int(time.time() * 1000)
-    from_ms = to_ms - minutes * 60 * 1000
+    conn = db_connect(db_path)
+    last_ms = conn.execute("SELECT MAX(ts_ms) FROM requests").fetchone()[0]
+    from_ms = min(to_ms - minutes * 60 * 1000, last_ms or to_ms)
     api = Api(token)
     rows = fetch_window(api, site_id, from_ms, to_ms)
     rows.sort(key=lambda r: r.get("timestamp", ""))
 
-    conn = db_connect(db_path)
     if enrich:                                    # enrich only rows we don't already have
         have = db_existing(conn, [r["request_id"] for r in rows if r.get("request_id")])
         enrich_rows(api, site_id,
@@ -229,7 +232,7 @@ def do_pull(token, site_id, minutes, db_path, enrich=True):
     new = db_insert(conn, rows)
     conn.close()
 
-    return {"window_min": minutes, "seen": len(rows), "new": new,
+    return {"window_min": (to_ms - from_ms) // 60000, "seen": len(rows), "new": new,
             "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "out": db_path}
 
 
